@@ -35,7 +35,6 @@ def style_duplicates(df):
     counts = df["Match"].value_counts()
     df["Duplicate"] = df["Match"].map(lambda x: "⚠️ Duplicate" if counts[x] > 1 else "✅ Unique")
 
-    # Build a safe sort key list based on present columns
     sort_by = ["Duplicate", "Match"]
     for col in ["Rule", "Gematria Field", "Source"]:
         if col in df.columns:
@@ -77,7 +76,9 @@ def date_values(d):
     yy = y % 100
     d_digits, yy_digits, y_digits = digits_no_zero(day), digits_no_zero(yy), digits_no_zero(y)
 
+    # 4: days left in the year (counts through Dec 31)
     v4 = (date(y, 12, 31) - d).days
+    # 5: day of year (1-indexed)
     v5 = (d - date(y, 1, 1)).days + 1
 
     v1  = m + sum(d_digits) + sum(y_digits)
@@ -148,47 +149,26 @@ def pairwise_gd_zero_insensitive(name, dvals):
                 })
     return pd.DataFrame(rows)
 
-def pairwise_gp(name, jersey, primes, dvals):
-    """2-Way (G/J ↔ Prime) — digit-sum must match Gematria/Jersey or Date."""
-    gvals = gematria_values(name)
+def pairwise_section2_jersey_prime_matches_date(jersey, primes, dvals):
+    """
+    SECTION 2 — Jersey-only rule:
+      Use the jersey number n as a prime INDEX (n → p_n).
+      Trigger a match ONLY if p_n equals a Date value (zero-insensitive).
+      (No gematria, no digit-sum.)
+    """
     rows = []
-
-    def gj_hits(s):
-        hits = [lbl for lbl, val in gvals.items() if s == val]
-        if s == jersey: hits.append("Jersey")
-        return hits
-
-    def date_hits(s):
-        return [f"V{i}={dv}" for i, dv in enumerate(dvals, 1) if zero_insensitive_equal(s, dv)]
-
-    for label, v in list(gvals.items()) + [("Jersey", jersey)]:
-        if v in primes:
-            s = digit_sum(v)
-            g, d = gj_hits(s), date_hits(s)
-            if g or d:
-                rows.append({
-                    "Rule": "Prime value digit-sum",
-                    "Source": label,
-                    "Value": v,
-                    "Detail": f"{v} is prime → digit-sum {s}",
-                    "Matched G/J": ", ".join(g),
-                    "Matched Date": ", ".join(d),
-                    "Match": s
-                })
-        if isinstance(v, int) and 1 <= v <= len(primes):
-            p = primes[v - 1]
-            s = digit_sum(p)
-            g, d = gj_hits(s), date_hits(s)
-            if g or d:
-                rows.append({
-                    "Rule": "Index→prime digit-sum",
-                    "Source": label,
-                    "Value": v,
-                    "Detail": f"{v}th prime = {p} → digit-sum {s}",
-                    "Matched G/J": ", ".join(g),
-                    "Matched Date": ", ".join(d),
-                    "Match": s
-                })
+    if isinstance(jersey, int) and 1 <= jersey <= len(primes):
+        p = primes[jersey - 1]
+        hits = [f"V{i}={dv}" for i, dv in enumerate(dvals, 1) if zero_insensitive_equal(p, dv)]
+        if hits:
+            rows.append({
+                "Rule": "Jersey index → prime value equals Date",
+                "Source": "Jersey",
+                "Jersey #": jersey,
+                "Prime p_n": p,
+                "Matched Date": ", ".join(hits),
+                "Match": p
+            })
     return pd.DataFrame(rows)
 
 def pairwise_dp(dvals, primes):
@@ -213,15 +193,18 @@ def three_way(name, jersey, dvals, primes):
                      "Date Value": f"V{i}={dv}", "Prime Detail": detail, "Match": m})
 
     for lab, n in sources:
+        # A) Same number is prime and matches Date (zero-insensitive on Date)
         if n in idx:
             for i, dv in enumerate(dvals, 1):
                 if zero_insensitive_equal(n, dv):
                     add("A) Same prime", lab, n, i, dv, f"{n} is prime (#{idx[n]})", n)
+        # B) n as index → prime value matches Date (zero-insensitive on Date)
         if isinstance(n, int) and 1 <= n <= len(primes):
             p = primes[n - 1]
             for i, dv in enumerate(dvals, 1):
                 if zero_insensitive_equal(p, dv):
                     add("B) Index→prime", lab, n, i, dv, f"{n}th prime = {p}", p)
+            # C) digit-sum(p_n) equals a G/J value; Date tied via n or p_n
             s = digit_sum(p)
             if s in gj_vals:
                 for i, dv in enumerate(dvals, 1):
@@ -234,7 +217,7 @@ def three_way(name, jersey, dvals, primes):
 # =========================
 # UI
 # =========================
-st.title("Athlete Numerology Checker — with Gematria↔Date (Zero-insensitive)")
+st.title("Athlete Numerology Checker — Section 2 = Jersey → Prime equals Date")
 
 name = st.text_input("Player name")
 jersey = st.number_input("Jersey number", min_value=0, step=1, value=0)
@@ -261,17 +244,17 @@ if st.button("Calculate"):
         else:
             st.info("None.")
 
-        st.subheader("Gematria ↔ Date (Zero-insensitive)")
+        st.subheader("Gematria ↔ Date (zero-insensitive)")
         df_gd_zero = style_duplicates(pairwise_gd_zero_insensitive(name.strip(), dvals))
         if df_gd_zero is not None and not df_gd_zero.empty:
             st.dataframe(df_gd_zero, use_container_width=True)
         else:
             st.info("None.")
 
-        st.subheader("2-Way Matches: G/J ↔ Prime (digit-sum must match G/J or Date)")
-        df_gp = style_duplicates(pairwise_gp(name.strip(), int(jersey), primes, dvals))
-        if df_gp is not None and not df_gp.empty:
-            st.dataframe(df_gp, use_container_width=True)
+        st.subheader("2-Way: Jersey → Prime equals Date (zero-insensitive)")
+        df_sec2 = style_duplicates(pairwise_section2_jersey_prime_matches_date(int(jersey), primes, dvals))
+        if df_sec2 is not None and not df_sec2.empty:
+            st.dataframe(df_sec2, use_container_width=True)
         else:
             st.info("None.")
 
@@ -288,3 +271,4 @@ if st.button("Calculate"):
             st.dataframe(df_3w, use_container_width=True)
         else:
             st.info("None.")
+
