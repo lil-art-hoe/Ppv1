@@ -299,7 +299,7 @@ PRIORITY = [
 def _compute_highlights(matches_df: pd.DataFrame):
     # Prepare containers: per-table, per-system, and any-system
     systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
-    tables = ["home", "away", "venue"]
+    tables = ["home", "away", "venue", "date"]
     highlights = {t: {"by_system": {s: {typ: set() for typ in PALETTE} for s in systems},
                       "any": {typ: set() for typ in PALETTE}} for t in tables}
 
@@ -329,17 +329,25 @@ def _compute_highlights(matches_df: pd.DataFrame):
         elif typ == "venue-away direct" and sys_name is not None:
             add_sys(["venue", "away"], typ, sys_name, val)
         elif typ == "value-date direct":
-            add_any(["home", "away", "venue"], typ, val)
+            add_any(["home", "away", "venue", "date"], typ, val)
         elif typ == "prime-index":
             if n is not None:
-                add_any(["home", "away", "venue"], typ, n)   # highlight team/venue value n
+                add_any(["home", "away", "venue"], typ, n)
+            if val is not None:
+                add_any(["date"], typ, val)   # date value equals nth prime
         elif typ == "prime-digit-sum":
             if n is not None:
                 add_any(["home", "away", "venue"], typ, n)
+            if val is not None:
+                add_any(["date"], typ, val)   # date value equals digit sum
         elif typ == "date->prime-index->value":
-            add_any(["home", "away", "venue"], typ, val)     # highlight the team/venue value (which equals prime)
+            add_any(["home", "away", "venue"], typ, val)
+            if n is not None:
+                add_any(["date"], typ, n)     # highlight the date value n
         elif typ == "date->prime-digit-sum->value":
-            add_any(["home", "away", "venue"], typ, val)     # highlight the digit-sum that equals a team/venue value
+            add_any(["home", "away", "venue"], typ, val)
+            if n is not None:
+                add_any(["date"], typ, n)     # highlight the date value n
         # else: ignore unknown types
     return highlights
 
@@ -359,6 +367,15 @@ def _style_for_value(v, sys_name, table_label, highlights):
             color = PALETTE[typ]
             return f"background-color:{color};color:white;font-weight:600"
     return ""
+
+
+def style_date_df_with_highlights(df: pd.DataFrame, highlights):
+    disp = df.copy()
+    if "value" in disp.columns:
+        styler = disp.style.apply(lambda col: [ _style_for_value(v, "ordinal", "date", highlights) for v in col ], subset=["value"])
+        return styler
+    return disp.style
+
 
 def style_df_with_highlights(df: pd.DataFrame, table_label: str, highlights):
     # Work on a copy without 'source' column
@@ -417,30 +434,36 @@ if venue.strip():
 date_vals = date_numbers(game_date)
 
 matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
+
+hl = _compute_highlights(matches_df)
 st.subheader("Team Values (from all CSV columns)")
 c1, c2 = st.columns(2)
 with c1:
     st.markdown("**Home team**")
     if highlight_tables:
-        st.table(style_df_with_highlights(home_df, "home", _compute_highlights(matches_df)))
+        st.table(style_df_with_highlights(home_df, "home", hl))
     else:
         st.dataframe(home_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 with c2:
     st.markdown("**Away team**")
     if highlight_tables:
-        st.table(style_df_with_highlights(away_df, "away", _compute_highlights(matches_df)))
+        st.table(style_df_with_highlights(away_df, "away", hl))
     else:
         st.dataframe(away_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 if venue_df is not None:
     st.markdown("**Venue gematria**")
     if highlight_tables:
-        st.table(style_df_with_highlights(venue_df, "venue", _compute_highlights(matches_df)))
+        st.table(style_df_with_highlights(venue_df, "venue", hl))
     else:
         st.dataframe(venue_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 st.subheader("Date Numbers")
-st.dataframe(pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_vals.values())}), use_container_width=True)
+date_df = pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_vals.values())})
+if highlight_tables:
+    st.table(style_date_df_with_highlights(date_df, hl))
+else:
+    st.dataframe(date_df, use_container_width=True)
 
 matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
 st.subheader("Matches")
