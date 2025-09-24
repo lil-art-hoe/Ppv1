@@ -551,6 +551,7 @@ default_path = "nfl_teams_aliases_3_with_state.csv"
 file = st.sidebar.file_uploader("Upload team CSV", type=["csv"], help="Any columns are allowed. At minimum include team_full.")
 csv_path_info = st.sidebar.text_input("Or type a CSV path", value=default_path)
 highlight_tables = st.sidebar.checkbox("Highlight matches in tables", value=True)
+collapse_all = st.sidebar.checkbox("Collapse all sections", value=False)
 
 teams_df = None
 try:
@@ -616,49 +617,53 @@ primes_df = build_prime_hits(matches_df)
 st.subheader("Team Values (from all CSV columns)")
 c1, c2 = st.columns(2)
 with c1:
-    st.markdown("**Home team**")
-    if highlight_tables:
-        st.table(style_df_with_highlights(home_df, "home", hl, colors_map))
-    else:
-        st.dataframe(home_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
+    with st.expander("Home team", expanded=not collapse_all):
+        if highlight_tables:
+            st.table(style_df_with_highlights(home_df, "home", hl, colors_map))
+        else:
+            st.dataframe(home_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 with c2:
-    st.markdown("**Away team**")
-    if highlight_tables:
-        st.table(style_df_with_highlights(away_df, "away", hl, colors_map))
-    else:
-        st.dataframe(away_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
+    with st.expander("Away team", expanded=not collapse_all):
+        if highlight_tables:
+            st.table(style_df_with_highlights(away_df, "away", hl, colors_map))
+        else:
+            st.dataframe(away_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 if venue_df is not None:
-    st.markdown("**Venue gematria**")
-    if highlight_tables:
-        st.table(style_df_with_highlights(venue_df, "venue", hl, colors_map))
-    else:
-        st.dataframe(venue_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
+    with st.expander("Venue gematria", expanded=not collapse_all):
+        if highlight_tables:
+            st.table(style_df_with_highlights(venue_df, "venue", hl, colors_map))
+        else:
+            st.dataframe(venue_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 st.subheader("Date Numbers")
 date_df = pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_vals.values())})
-if highlight_tables:
-    st.table(style_date_df_with_highlights(date_df, hl, colors_map))
-else:
-    st.dataframe(date_df, use_container_width=True)
+with st.expander("Date Numbers", expanded=not collapse_all):
+    if highlight_tables:
+        st.table(style_date_df_with_highlights(date_df, hl, colors_map))
+    else:
+        st.dataframe(date_df, use_container_width=True)
 
 st.subheader("Prime Hits")
 if primes_df is None or primes_df.empty:
     st.caption("No prime-related matches.")
 else:
-    st.table(style_primes_df_with_highlights(primes_df, colors_map))
+    with st.expander("Prime Hits", expanded=not collapse_all):
+        st.table(style_primes_df_with_highlights(primes_df, colors_map))
 
 st.subheader("Grouped by Number (Color)")
 summary_df = build_match_summary(matches_df, hl, colors_map)
 if summary_df is None or summary_df.empty:
     st.caption("No matches to summarize.")
 else:
-    st.table(style_summary_with_colors(summary_df))
+    with st.expander("Grouped by Number (Color)", expanded=not collapse_all):
+        st.table(style_summary_with_colors(summary_df))
 
 st.subheader("Matches")
 if matches_df.empty:
     st.info("No matches found with the current inputs.")
 else:
-    st.table(style_matches_df_with_highlights(_prettify_matches(matches_df), colors_map))
+    with st.expander("Matches", expanded=not collapse_all):
+        st.table(style_matches_df_with_highlights(_prettify_matches(matches_df), colors_map))
 
 st.caption("Notes: All non-empty text cells are included. 'aliases' is split on ';' or ','. Duplicates are removed based on case/punctuation-insensitive comparison.")
