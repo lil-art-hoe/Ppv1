@@ -33,6 +33,10 @@ def _gematria_maps():
 
 ORD, RED, RORD, RRED = _gematria_maps()
 
+def _zero_free_int(n: int) -> int:
+    s = ''.join(ch for ch in str(int(n)) if ch != '0')
+    return int(s) if s else 0
+
 def _clean_text(s: str) -> str:
     return "".join(ch for ch in str(s).upper() if "A" <= ch <= "Z")
 
@@ -151,6 +155,7 @@ def build_name_table_from_row(row: pd.Series) -> pd.DataFrame:
 # --------------------
 # Matching logic
 # --------------------
+
 def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[str, int], venue_df: pd.DataFrame | None = None) -> pd.DataFrame:
     def values_from(df: pd.DataFrame) -> Dict[str, Set[int]]:
         v = {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
@@ -163,17 +168,23 @@ def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[s
     away_vals = values_from(away_df) if away_df is not None else {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
     venue_vals = values_from(venue_df) if venue_df is not None else {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
 
-    date_values_set: Set[int] = set(date_nums.values())
+    # Build date value sets (raw and zero-free)
+    date_values = list(date_nums.values())
+    date_set_raw: Set[int] = set(int(x) for x in date_values)
+    date_set_zf: Set[int] = set(_zero_free_int(int(x)) for x in date_values)
+
     matches = []
 
     def record(match_type, detail, value, context):
         matches.append({"type": match_type, "detail": detail, "value": int(value), "context": context})
 
+    # Direct matches between home & away by system
     for sys in home_vals.keys():
         inter = home_vals[sys].intersection(away_vals[sys])
         for val in sorted(inter):
             record("home-away direct", sys, val, {"system": sys})
 
+    # Venue vs Home/Away
     for sys in venue_vals.keys():
         inter_home = venue_vals[sys].intersection(home_vals[sys])
         for val in sorted(inter_home):
@@ -182,30 +193,39 @@ def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[s
         for val in sorted(inter_away):
             record("venue-away direct", sys, val, {"system": sys})
 
-    all_vals = set().union(*home_vals.values()).union(*away_vals.values()).union(*venue_vals.values())
-    for val in sorted(all_vals):
-        if val in date_values_set:
+    # Aggregate all team/venue values
+    all_team_vals = set().union(*home_vals.values()).union(*away_vals.values()).union(*venue_vals.values())
+    all_team_vals_zf = set(_zero_free_int(v) for v in all_team_vals)
+
+    # Team/Venue value equals Date value (zero-insensitive)
+    for val in sorted(all_team_vals):
+        if (val in date_set_raw) or (_zero_free_int(val) in date_set_zf):
             record("value-date direct", "any system", val, {})
 
-    for val in sorted(all_vals):
+    # Prime index & digit-sum (date compared zero-insensitively to prime values)
+    for val in sorted(all_team_vals):
         if val in PRIME_INDEX:
             p = PRIME_INDEX[val]
-            if p in date_values_set:
+            ds = digit_sum_once(p)
+            # Compare date values to p and digit sum, zero-insensitive
+            if (p in date_set_raw) or (_zero_free_int(p) in date_set_zf):
                 record("prime-index", f"nth prime where n={val}", p, {"n": val, "prime": p})
-            s = digit_sum_once(p)
-            if s in date_values_set:
-                record("prime-digit-sum", f"sum(digits(prime(n))) where n={val}", s, {"n": val, "prime": p})
+            if (ds in date_set_raw) or (_zero_free_int(ds) in date_set_zf):
+                record("prime-digit-sum", f"sum(digits(prime(n))) where n={val}", ds, {"n": val, "prime": p})
 
-    for dv in sorted(date_values_set):
-        if dv in PRIME_INDEX:
-            p = PRIME_INDEX[dv]
-            if p in all_vals:
-                record("date->prime-index->value", "prime(date_value) equals team/venue value", p, {"n": dv, "prime": p})
-            s = digit_sum_once(p)
-            if s in all_vals:
-                record("date->prime-digit-sum->value", "sum(digits(prime(date_value))) equals team/venue value", s, {"n": dv, "prime": p})
+    # Reverse: date (zero-free) acts as n
+    for dv in sorted(date_set_raw):
+        n = _zero_free_int(dv)
+        if n in PRIME_INDEX:
+            p = PRIME_INDEX[n]
+            ds = digit_sum_once(p)
+            if (p in all_team_vals) or (_zero_free_int(p) in all_team_vals_zf):
+                record("date->prime-index->value", "prime(date_value) equals team/venue value", p, {"n": n, "prime": p})
+            if (ds in all_team_vals) or (_zero_free_int(ds) in all_team_vals_zf):
+                record("date->prime-digit-sum->value", "sum(digits(prime(date_value))) equals team/venue value", ds, {"n": n, "prime": p})
 
     return pd.DataFrame(matches)
+
 
 # --------------------
 # Pretty Matches
@@ -294,16 +314,17 @@ def _collect_values(highlights):
         for v in obj.get("any", set()):
             vals.add(int(v))
         # per-system
-        for sysname, vset in obj.get("by_system", {}).items():
-            for typ, s in vset.items():
+        for sysname, d in obj.get("by_system", {}).items():
+            for typ, s in d.items():
                 for v in s:
                     vals.add(int(v))
-    return vals
+    # normalize to zero-free
+    return set(_zero_free_int(v) for v in vals)
 
 def _build_value_colors(highlights):
     # Map every participating integer to a unique color
     values = sorted(_collect_values(highlights))
-    return {v: _int_to_hex_color(v) for v in values}
+    return {v: _int_to_hex_color(v) for v in sorted(values)}
 
 def _empty_highlights():
     systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
@@ -320,7 +341,7 @@ def _compute_highlights(matches_df: pd.DataFrame):
 
     def add_any(tables_sel, val, typ):
         for tb in tables_sel:
-            highlights[tb]["any"].add(int(val))
+            highlights[tb]["any"].add(_zero_free_int(int(val)))
 
     def add_sys(tables_sel, sys_name, val, typ):
         sys_name = str(sys_name)
@@ -328,7 +349,7 @@ def _compute_highlights(matches_df: pd.DataFrame):
             d = highlights[tb]["by_system"][sys_name]
             if typ not in d:
                 d[typ] = set()
-            d[typ].add(int(val))
+            d[typ].add(_zero_free_int(int(val)))
 
     for _, r in matches_df.iterrows():
         typ = r.get("type")
@@ -371,11 +392,11 @@ def _style_for_value(v, sys_name, table_label, highlights, color_for):
         vv = int(v)
     except Exception:
         return ""
-    # Check system-scoped first
+    vvz = _zero_free_int(vv)
     bysys = highlights.get(table_label, {}).get("by_system", {}).get(sys_name, {})
-    in_sys = any(vv in s for s in bysys.values())
-    if in_sys or vv in highlights.get(table_label, {}).get("any", set()):
-        color = color_for.get(vv, "#4b5563")  # fallback gray
+    in_sys = any(vvz in s for s in bysys.values())
+    if in_sys or vvz in highlights.get(table_label, {}).get("any", set()):
+        color = color_for.get(vvz, "#4b5563")
         return f"background-color:{color};color:white;font-weight:600"
     return ""
 
@@ -394,6 +415,41 @@ def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for):
         styler = disp.style.apply(lambda col: [ _style_for_value(v, "ordinal", "date", highlights, color_for) for v in col ], subset=["value"])
         return styler
     return disp.style
+
+def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    if matches_df is None or matches_df.empty:
+        return pd.DataFrame(columns=["prime", "n", "digit_sum", "from"])
+    for _, r in matches_df.iterrows():
+        typ = r.get("type")
+        ctx = r.get("context", {}) if isinstance(r.get("context", {}), dict) else {}
+        pval = ctx.get("prime", None)
+        n = ctx.get("n", None)
+        if pval is None:
+            continue
+        ds = digit_sum_once(int(pval))
+        rows.append({"prime": int(pval), "n": int(n) if n is not None else None, "digit_sum": int(ds), "from": str(typ)})
+    if not rows:
+        return pd.DataFrame(columns=["prime", "n", "digit_sum", "from"])
+    dfp = pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
+    return dfp
+
+def style_primes_df_with_highlights(df: pd.DataFrame, color_for):
+    disp = df.copy()
+    def _style_num(v):
+        try:
+            vv = int(v)
+        except Exception:
+            return ""
+        vvz = _zero_free_int(vv)
+        color = color_for.get(vvz, None)
+        return f"background-color:{color};color:white;font-weight:600" if color else ""
+    styler = disp.style
+    for col in ["prime", "n", "digit_sum"]:
+        if col in disp.columns:
+            styler = styler.apply(lambda c: [_style_num(v) for v in c], subset=[col])
+    return styler
+
 # --------------------
 # UI
 # --------------------
@@ -413,7 +469,7 @@ except Exception as e:
     st.sidebar.error(f"CSV load error: {e}")
 
 st.title("🏈 NFL Gematria — All CSV Columns")
-st.caption("Build gematria tables from every text column in your CSV (city, state, abbr, nickname, abbr_nickname, team_full, aliases, etc.).")
+st.caption("Build gematria tables from every text column in your CSV (city, state, abbr, nickname, abbr_nickname, team_full, aliases, etc.). You can also add **Quarterbacks** for both teams; they will be included in matching & highlights.")
 
 if teams_df is None:
     st.warning("Please upload a valid CSV or provide a correct path in the sidebar.")
@@ -426,13 +482,31 @@ with colB:
     away_team = st.selectbox("Away team", options=sorted(teams_df["team_full"].astype(str).unique()))
 
 game_date = st.date_input("Game date", value=date.today())
+home_qb = st.text_input("Home QB (optional)", value="", placeholder="e.g., Kyler Murray")
+away_qb = st.text_input("Away QB (optional)", value="", placeholder="e.g., Geno Smith")
 venue = st.text_input("Venue (City / Stadium)", value="", placeholder="e.g., SoFi Stadium, Inglewood, CA")
 
 home_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(home_team).lower()].iloc[0]
 away_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(away_team).lower()].iloc[0]
 
 home_df = build_name_table_from_row(home_row)
+
 away_df = build_name_table_from_row(away_row)
+
+# Append QB rows if provided (treated as additional team names)
+def _append_qb(df, qb_name: str):
+    qb = qb_name.strip()
+    if qb:
+        scores = gematria_scores(qb)
+        row = {"source": "QB", "name": qb, **scores}
+        # Avoid duplicate names (case-insensitive) already present
+        if "name" in df.columns and not df["name"].str.lower().eq(qb.lower()).any():
+            return pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    return df
+
+home_df = _append_qb(home_df, home_qb)
+away_df = _append_qb(away_df, away_qb)
+
 
 venue_df = None
 if venue.strip():
@@ -444,6 +518,7 @@ matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
 
 hl = _compute_highlights(matches_df)
 colors_map = _build_value_colors(hl)
+primes_df = build_prime_hits(matches_df)
 st.subheader("Team Values (from all CSV columns)")
 c1, c2 = st.columns(2)
 with c1:
@@ -474,6 +549,12 @@ else:
     st.dataframe(date_df, use_container_width=True)
 
 matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
+st.subheader("Prime Hits")
+if primes_df is None or primes_df.empty:
+    st.caption("No prime-related matches.")
+else:
+    st.table(style_primes_df_with_highlights(primes_df, colors_map))
+
 st.subheader("Matches")
 if matches_df.empty:
     st.info("No matches found with the current inputs.")
