@@ -450,6 +450,86 @@ def style_primes_df_with_highlights(df: pd.DataFrame, color_for):
             styler = styler.apply(lambda c: [_style_num(v) for v in c], subset=[col])
     return styler
 
+
+def _tables_for_number(vz, highlights):
+    present = []
+    for tb in ["home", "away", "venue", "date"]:
+        anyset = highlights.get(tb, {}).get("any", set())
+        bysys = highlights.get(tb, {}).get("by_system", {})
+        in_any = vz in anyset
+        in_sys = any(vz in s for s in bysys.values()) if isinstance(bysys, dict) else False
+        if in_any or in_sys:
+            present.append(tb)
+    return present
+
+def build_match_summary(matches_df: pd.DataFrame, highlights, color_for: dict) -> pd.DataFrame:
+    if matches_df is None or matches_df.empty:
+        return pd.DataFrame(columns=["number", "color", "appears_in", "categories", "prime_links", "systems"])
+
+    rows = {}
+    def add_row(vz, **kw):
+        if vz not in rows:
+            rows[vz] = {"number": vz, "color": color_for.get(vz, "#4b5563"),
+                        "appears_in": set(), "categories": set(), "prime_links": set(), "systems": {"home": set(), "away": set(), "venue": set()}}
+        r = rows[vz]
+        # tables
+        for tb in _tables_for_number(vz, highlights):
+            r["appears_in"].add(tb)
+        # categories
+        if "cat" in kw and kw["cat"]:
+            r["categories"].add(kw["cat"])
+        # prime links
+        if "prime" in kw and kw["prime"] is not None and "n" in kw:
+            p = int(kw["prime"])
+            n = int(kw["n"]) if kw["n"] is not None else None
+            ds = digit_sum_once(p)
+            r["prime_links"].add(f"n={n} → prime={p} (ds={ds})")
+        # systems
+        if "system" in kw and kw["system"] and "who" in kw:
+            who = kw["who"]
+            sysn = kw["system"]
+            if who in r["systems"]:
+                r["systems"][who].add(sysn)
+
+    for _, row in matches_df.iterrows():
+        typ = row.get("type")
+        val = int(row.get("value"))
+        vz = _zero_free_int(val)
+        ctx = row.get("context", {}) if isinstance(row.get("context", {}), dict) else {}
+        sysn = ctx.get("system", None)
+        n = ctx.get("n", None)
+        prime = ctx.get("prime", None)
+        # Always add the row for value's zero-free number
+        add_row(vz, cat=typ, system=sysn, who=("home" if typ=="venue-home direct" else "away" if typ=="venue-away direct" else None), n=n, prime=prime)
+        # For prime-related events also add the zero-free(n)
+        if typ in ("prime-index", "prime-digit-sum", "date->prime-index->value", "date->prime-digit-sum->value"):
+            if n is not None:
+                add_row(_zero_free_int(int(n)), cat=typ, system=sysn, who=None, n=n, prime=prime)
+            if prime is not None:
+                add_row(_zero_free_int(int(prime)), cat=typ, system=None, who=None, n=n, prime=prime)
+            if typ in ("prime-digit-sum", "date->prime-digit-sum->value") and prime is not None:
+                add_row(_zero_free_int(digit_sum_once(int(prime))), cat=typ, system=None, who=None, n=n, prime=prime)
+
+    # materialize rows
+    out_rows = []
+    for vz, r in rows.items():
+        appears = ", ".join(k.capitalize() for k in ["home","away","venue","date"] if k in r["appears_in"])
+        cats = ", ".join(sorted(r["categories"]))
+        prime_links = " | ".join(sorted(r["prime_links"])) if r["prime_links"] else ""
+        systems_str = "; ".join([f'{k.capitalize()}: {", ".join(sorted(v))}' for k, v in r["systems"].items() if v])
+        out_rows.append({"Number": vz, "Color": r["color"], "Appears In": appears, "Categories": cats, "Systems": systems_str, "Prime Links": prime_links})
+    df = pd.DataFrame(out_rows).sort_values(by="Number").reset_index(drop=True)
+    return df
+
+def style_summary_with_colors(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
+    disp = df.copy()
+    if "Color" in disp.columns:
+        def _style_color(v):
+            return f"background-color:{v};" if isinstance(v, str) and v.startswith("#") else ""
+        styler = disp.style.apply(lambda c: [_style_color(v) for v in c], subset=["Color"])
+        return styler
+    return disp.style
+
 # --------------------
 # UI
 # --------------------
@@ -554,6 +634,13 @@ if primes_df is None or primes_df.empty:
     st.caption("No prime-related matches.")
 else:
     st.table(style_primes_df_with_highlights(primes_df, colors_map))
+
+st.subheader("Grouped by Number (Color)")
+summary_df = build_match_summary(matches_df, hl, colors_map)
+if summary_df is None or summary_df.empty:
+    st.caption("No matches to summarize.")
+else:
+    st.table(style_summary_with_colors(summary_df))
 
 st.subheader("Matches")
 if matches_df.empty:
