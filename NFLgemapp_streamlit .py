@@ -416,6 +416,7 @@ if venue.strip():
 
 date_vals = date_numbers(game_date)
 
+matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
 st.subheader("Team Values (from all CSV columns)")
 c1, c2 = st.columns(2)
 with c1:
