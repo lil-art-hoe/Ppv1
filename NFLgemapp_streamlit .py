@@ -409,12 +409,33 @@ def style_df_with_highlights(df: pd.DataFrame, table_label: str, highlights, col
             styler = styler.apply(lambda col: [ _style_for_value(v, sys_name, table_label, highlights, color_for) for v in col ], subset=[sys_name])
     return styler
 
+
 def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for):
     disp = df.copy()
+    # Collect exactly the numbers that should be highlighted in the DATE table
+    date_any = set(highlights.get("date", {}).get("any", set()))
+    date_sys_union = set()
+    for sysname, d in highlights.get("date", {}).get("by_system", {}).items():
+        for s in d.values():
+            date_sys_union |= set(s)
+    allowed = date_any | date_sys_union
+
+    def _style_date_cell(v):
+        try:
+            vv = int(v)
+        except Exception:
+            return ""
+        vvz = _zero_free_int(vv)
+        if vvz in allowed:
+            color = color_for.get(vvz, "#4b5563")
+            return f"background-color:{color};color:white;font-weight:600"
+        return ""
+
     if "value" in disp.columns:
-        styler = disp.style.apply(lambda col: [ _style_for_value(v, "ordinal", "date", highlights, color_for) for v in col ], subset=["value"])
+        styler = disp.style.apply(lambda col: [_style_date_cell(v) for v in col], subset=["value"])
         return styler
     return disp.style
+
 
 def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
