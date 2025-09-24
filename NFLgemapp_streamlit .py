@@ -455,6 +455,7 @@ def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
     dfp = pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
     return dfp
 
+
 def style_primes_df_with_highlights(df: pd.DataFrame, color_for):
     disp = df.copy()
     def _style_num(v):
@@ -465,11 +466,20 @@ def style_primes_df_with_highlights(df: pd.DataFrame, color_for):
         vvz = _zero_free_int(vv)
         color = color_for.get(vvz, None)
         return f"background-color:{color};color:white;font-weight:600" if color else ""
+    def _fmt_num(v):
+        try:
+            if pd.isna(v):
+                return ""
+            return f"{int(v)}"
+        except Exception:
+            return v
     styler = disp.style
     for col in ["prime", "n", "digit_sum"]:
         if col in disp.columns:
             styler = styler.apply(lambda c: [_style_num(v) for v in c], subset=[col])
+            styler = styler.format(_fmt_num, subset=[col])
     return styler
+
 
 
 def _tables_for_number(vz, highlights):
@@ -542,14 +552,27 @@ def build_match_summary(matches_df: pd.DataFrame, highlights, color_for: dict) -
     df = pd.DataFrame(out_rows).sort_values(by="Number").reset_index(drop=True)
     return df
 
+
 def style_summary_with_colors(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
     disp = df.copy()
+    def _style_color(v):
+        return f"background-color:{v};" if isinstance(v, str) and v.startswith("#") else ""
+    def _fmt_num(v):
+        try:
+            if pd.isna(v):
+                return ""
+            return f"{int(v)}"
+        except Exception:
+            return v
+    styler = disp.style
     if "Color" in disp.columns:
-        def _style_color(v):
-            return f"background-color:{v};" if isinstance(v, str) and v.startswith("#") else ""
-        styler = disp.style.apply(lambda c: [_style_color(v) for v in c], subset=["Color"])
-        return styler
+        styler = styler.apply(lambda c: [_style_color(v) for v in c], subset=["Color"])
+    if "Number" in disp.columns:
+        styler = styler.format(_fmt_num, subset=["Number"])
+    return styler
+
     return disp.style
+
 
 
 def style_matches_df_with_highlights(df: pd.DataFrame, color_for: dict) -> "pd.io.formats.style.Styler":
@@ -557,17 +580,28 @@ def style_matches_df_with_highlights(df: pd.DataFrame, color_for: dict) -> "pd.i
     cols_to_color = ["Matched Number", "Team/Venue Value (n)", "Prime # (if applicable)"]
     def _style_num(v):
         try:
+            if pd.isna(v):
+                return ""
             vv = int(v)
         except Exception:
             return ""
         vvz = _zero_free_int(vv)
         color = color_for.get(vvz, None)
         return f"background-color:{color};color:white;font-weight:600" if color else ""
+    def _fmt_num(v):
+        try:
+            if pd.isna(v):
+                return ""
+            return f"{int(v)}"
+        except Exception:
+            return v
     styler = disp.style
     for col in cols_to_color:
         if col in disp.columns:
             styler = styler.apply(lambda c: [_style_num(v) for v in c], subset=[col])
+            styler = styler.format(_fmt_num, subset=[col])
     return styler
+
 
 # --------------------
 # UI
