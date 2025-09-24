@@ -274,7 +274,7 @@ def _prettify_matches(matches_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 # --------------------
-# Highlighting utilities (per-integer colors)
+# Highlighting utilities (per-integer colors + focus border)
 # --------------------
 def _int_to_hex_color(n: int) -> str:
     h = (n * 0.61803398875) % 1.0
@@ -349,7 +349,7 @@ def _build_value_colors(highlights):
     values = sorted(_collect_values(highlights))
     return {v: _int_to_hex_color(v) for v in values}
 
-def _style_for_value(v, sys_name, table_label, highlights, color_for):
+def _style_for_value(v, sys_name, table_label, highlights, color_for, focus_set, enable_bg=True):
     try:
         vv = int(v)
     except Exception:
@@ -358,20 +358,25 @@ def _style_for_value(v, sys_name, table_label, highlights, color_for):
     bysys = highlights.get(table_label, {}).get("by_system", {}).get(sys_name, {})
     in_sys = any(vvz in s for s in bysys.values())
     if in_sys or vvz in highlights.get(table_label, {}).get("any", set()):
-        color = color_for.get(vvz, "#4b5563")
-        return f"background-color:{color};color:white;font-weight:600"
+        bg = f"background-color:{color_for.get(vvz, '#4b5563')};color:white;font-weight:600" if enable_bg else ""
+        border = "border:2px solid #ef4444" if (vvz in focus_set and vvz != 0) else ""
+        join = ";" if (bg and border) else ""
+        return f"{bg}{join}{border}" if (bg or border) else ""
+    # not in highlight sets
+    if vvz in focus_set and vvz != 0:
+        return "border:2px solid #ef4444"
     return ""
 
-def style_df_with_highlights(df: pd.DataFrame, table_label: str, highlights, color_for):
+def style_df_with_highlights(df: pd.DataFrame, table_label: str, highlights, color_for, focus_set, enable_bg=True):
     disp = df.drop(columns=["source"], errors="ignore").copy()
     systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
     styler = disp.style
     for sys_name in systems:
         if sys_name in disp.columns:
-            styler = styler.apply(lambda col: [ _style_for_value(v, sys_name, table_label, highlights, color_for) for v in col ], subset=[sys_name])
+            styler = styler.apply(lambda col: [ _style_for_value(v, sys_name, table_label, highlights, color_for, focus_set, enable_bg) for v in col ], subset=[sys_name])
     return styler
 
-def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for):
+def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for, focus_set, enable_bg=True):
     disp = df.copy()
     # Only highlight numbers that actually participate in matches
     date_any = set(highlights.get("date", {}).get("any", set()))
@@ -387,8 +392,12 @@ def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for):
             return ""
         vvz = _zero_free_int(vv)
         if vvz in allowed:
-            color = color_for.get(vvz, "#4b5563")
-            return f"background-color:{color};color:white;font-weight:600"
+            if enable_bg:
+                color = color_for.get(vvz, "#4b5563")
+                return f"background-color:{color};color:white;font-weight:600"
+            # else fall through to border-only
+        if vvz in focus_set and vvz != 0:
+            return "border:2px solid #ef4444"
         return ""
     if "value" in disp.columns:
         styler = disp.style.apply(lambda col: [_style_date_cell(v) for v in col], subset=["value"])
@@ -413,7 +422,7 @@ def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
     dfp = pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
     return dfp
 
-def style_primes_df_with_highlights(df: pd.DataFrame, color_for):
+def style_primes_df_with_highlights(df: pd.DataFrame, color_for, focus_set):
     disp = df.copy()
     def _style_num(v):
         try:
@@ -421,8 +430,12 @@ def style_primes_df_with_highlights(df: pd.DataFrame, color_for):
         except Exception:
             return ""
         vvz = _zero_free_int(vv)
-        color = color_for.get(vvz, None)
-        return f"background-color:{color};color:white;font-weight:600" if color else ""
+        bg = ""
+        if vvz in color_for:
+            bg = f"background-color:{color_for[vvz]};color:white;font-weight:600"
+        border = "border:2px solid #ef4444" if (vvz in focus_set and vvz != 0) else ""
+        join = ";" if (bg and border) else ""
+        return f"{bg}{join}{border}"
     def _fmt_num(v):
         try:
             if pd.isna(v):
@@ -498,7 +511,8 @@ def build_match_summary(matches_df: pd.DataFrame, highlights, color_for: dict) -
     df = pd.DataFrame(out_rows).sort_values(by="Number").reset_index(drop=True)
     return df
 
-def style_summary_with_colors(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
+def style_summary_with_colors(df: pd.DataFrame, focus_set=None) -> "pd.io.formats.style.Styler":
+    focus_set = focus_set or set()
     disp = df.copy()
     def _style_color(v):
         return f"background-color:{v};" if isinstance(v, str) and v.startswith("#") else ""
@@ -509,14 +523,21 @@ def style_summary_with_colors(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
             return f"{int(v)}"
         except Exception:
             return v
+    def _style_number(v):
+        try:
+            vvz = _zero_free_int(int(v))
+        except Exception:
+            return ""
+        return "border:2px solid #ef4444" if (vvz in focus_set and vvz != 0) else ""
     styler = disp.style
     if "Color" in disp.columns:
         styler = styler.apply(lambda c: [_style_color(v) for v in c], subset=["Color"])
     if "Number" in disp.columns:
         styler = styler.format(_fmt_num, subset=["Number"])
+        styler = styler.apply(lambda c: [_style_number(v) for v in c], subset=["Number"])
     return styler
 
-def style_matches_df_with_highlights(df: pd.DataFrame, color_for: dict) -> "pd.io.formats.style.Styler":
+def style_matches_df_with_highlights(df: pd.DataFrame, color_for: dict, focus_set) -> "pd.io.formats.style.Styler":
     disp = df.copy()
     cols_to_color = ["Matched Number", "Team/Venue Value (n)", "Prime # (if applicable)"]
     def _style_num(v):
@@ -527,8 +548,12 @@ def style_matches_df_with_highlights(df: pd.DataFrame, color_for: dict) -> "pd.i
         except Exception:
             return ""
         vvz = _zero_free_int(vv)
-        color = color_for.get(vvz, None)
-        return f"background-color:{color};color:white;font-weight:600" if color else ""
+        bg = ""
+        if vvz in color_for:
+            bg = f"background-color:{color_for[vvz]};color:white;font-weight:600"
+        border = "border:2px solid #ef4444" if (vvz in focus_set and vvz != 0) else ""
+        join = ";" if (bg and border) else ""
+        return f"{bg}{join}{border}"
     def _fmt_num(v):
         try:
             if pd.isna(v):
@@ -552,6 +577,16 @@ file = st.sidebar.file_uploader("Upload team CSV", type=["csv"], help="Any colum
 csv_path_info = st.sidebar.text_input("Or type a CSV path", value=default_path)
 highlight_tables = st.sidebar.checkbox("Highlight matches in tables", value=True)
 collapse_all = st.sidebar.checkbox("Collapse all sections", value=False)
+focus_numbers_raw = st.sidebar.text_input("Focus number(s) (comma-separated, optional)", value="")
+def _parse_focus_set(s: str):
+    vals = set()
+    for part in re.split(r"[\s,]+", s.strip()):
+        if part.isdigit():
+            n = int(part)
+            if n > 0:
+                vals.add(n)
+    return set(_zero_free_int(v) for v in vals)
+focus_set = _parse_focus_set(focus_numbers_raw)
 
 teams_df = None
 try:
@@ -618,29 +653,29 @@ st.subheader("Team Values (from all CSV columns)")
 c1, c2 = st.columns(2)
 with c1:
     with st.expander("Home team", expanded=not collapse_all):
-        if highlight_tables:
-            st.table(style_df_with_highlights(home_df, "home", hl, colors_map))
+        if highlight_tables or focus_set:
+            st.table(style_df_with_highlights(home_df, "home", hl, colors_map, focus_set, enable_bg=highlight_tables))
         else:
             st.dataframe(home_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 with c2:
     with st.expander("Away team", expanded=not collapse_all):
-        if highlight_tables:
-            st.table(style_df_with_highlights(away_df, "away", hl, colors_map))
+        if highlight_tables or focus_set:
+            st.table(style_df_with_highlights(away_df, "away", hl, colors_map, focus_set, enable_bg=highlight_tables))
         else:
             st.dataframe(away_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 if venue_df is not None:
     with st.expander("Venue gematria", expanded=not collapse_all):
-        if highlight_tables:
-            st.table(style_df_with_highlights(venue_df, "venue", hl, colors_map))
+        if highlight_tables or focus_set:
+            st.table(style_df_with_highlights(venue_df, "venue", hl, colors_map, focus_set, enable_bg=highlight_tables))
         else:
             st.dataframe(venue_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 st.subheader("Date Numbers")
 date_df = pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_vals.values())})
 with st.expander("Date Numbers", expanded=not collapse_all):
-    if highlight_tables:
-        st.table(style_date_df_with_highlights(date_df, hl, colors_map))
+    if highlight_tables or focus_set:
+        st.table(style_date_df_with_highlights(date_df, hl, colors_map, focus_set, enable_bg=highlight_tables))
     else:
         st.dataframe(date_df, use_container_width=True)
 
@@ -649,7 +684,7 @@ if primes_df is None or primes_df.empty:
     st.caption("No prime-related matches.")
 else:
     with st.expander("Prime Hits", expanded=not collapse_all):
-        st.table(style_primes_df_with_highlights(primes_df, colors_map))
+        st.table(style_primes_df_with_highlights(primes_df, colors_map, focus_set))
 
 st.subheader("Grouped by Number (Color)")
 summary_df = build_match_summary(matches_df, hl, colors_map)
@@ -657,13 +692,13 @@ if summary_df is None or summary_df.empty:
     st.caption("No matches to summarize.")
 else:
     with st.expander("Grouped by Number (Color)", expanded=not collapse_all):
-        st.table(style_summary_with_colors(summary_df))
+        st.table(style_summary_with_colors(summary_df, focus_set))
 
 st.subheader("Matches")
 if matches_df.empty:
     st.info("No matches found with the current inputs.")
 else:
     with st.expander("Matches", expanded=not collapse_all):
-        st.table(style_matches_df_with_highlights(_prettify_matches(matches_df), colors_map))
+        st.table(style_matches_df_with_highlights(_prettify_matches(matches_df), colors_map, focus_set))
 
 st.caption("Notes: All non-empty text cells are included. 'aliases' is split on ';' or ','. Duplicates are removed based on case/punctuation-insensitive comparison.")
