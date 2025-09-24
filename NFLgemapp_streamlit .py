@@ -272,48 +272,63 @@ def _prettify_matches(matches_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# --------------------
-# Highlighting utilities
-# --------------------
-PALETTE = {
-    "home-away direct": "#10b981",             # emerald
-    "venue-home direct": "#6366f1",            # indigo
-    "venue-away direct": "#6366f1",            # indigo
-    "value-date direct": "#6b7280",            # gray
-    "prime-index": "#06b6d4",                  # cyan
-    "prime-digit-sum": "#f97316",              # orange
-    "date->prime-index->value": "#22c55e",     # green
-    "date->prime-digit-sum->value": "#d946ef", # fuchsia
-}
-PRIORITY = [
-    "home-away direct",
-    "prime-index",
-    "prime-digit-sum",
-    "date->prime-index->value",
-    "date->prime-digit-sum->value",
-    "venue-home direct",
-    "venue-away direct",
-    "value-date direct",
-]
 
-def _compute_highlights(matches_df: pd.DataFrame):
-    # Prepare containers: per-table, per-system, and any-system
+# --------------------
+# Highlighting utilities (per-integer colors)
+# --------------------
+import colorsys
+
+def _int_to_hex_color(n: int) -> str:
+    # Deterministic distinct-ish color per integer using the golden angle on the hue wheel.
+    # colorsys uses HLS: (h, l, s). We'll keep good contrast for table backgrounds.
+    h = (n * 0.61803398875) % 1.0          # wrap hue
+    l = 0.38                                # lightness (0..1)
+    s = 0.70                                # saturation (0..1)
+    r, g, b = colorsys.hls_to_rgb(h, l, s)
+    return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+
+def _collect_values(highlights):
+    vals = set()
+    for tb, obj in highlights.items():
+        # any-set
+        for v in obj.get("any", set()):
+            vals.add(int(v))
+        # per-system
+        for sysname, vset in obj.get("by_system", {}).items():
+            for typ, s in vset.items():
+                for v in s:
+                    vals.add(int(v))
+    return vals
+
+def _build_value_colors(highlights):
+    # Map every participating integer to a unique color
+    values = sorted(_collect_values(highlights))
+    return {v: _int_to_hex_color(v) for v in values}
+
+def _empty_highlights():
     systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
     tables = ["home", "away", "venue", "date"]
-    highlights = {t: {"by_system": {s: {typ: set() for typ in PALETTE} for s in systems},
-                      "any": {typ: set() for typ in PALETTE}} for t in tables}
+    return {t: {"by_system": {s: {} for s in systems}, "any": set()} for t in tables}
 
+def _compute_highlights(matches_df: pd.DataFrame):
+    systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
+    tables = ["home", "away", "venue", "date"]
+    highlights = {t: {"by_system": {s: {} for s in systems}, "any": set()} for t in tables}
+    # Each by_system dict holds {match_type: set(values)} though we won't color by type anymore.
     if matches_df is None or matches_df.empty:
         return highlights
 
-    def add_any(tables_sel, typ, val):
+    def add_any(tables_sel, val, typ):
         for tb in tables_sel:
-            highlights[tb]["any"][typ].add(int(val))
+            highlights[tb]["any"].add(int(val))
 
-    def add_sys(tables_sel, typ, sys_name, val):
+    def add_sys(tables_sel, sys_name, val, typ):
         sys_name = str(sys_name)
         for tb in tables_sel:
-            highlights[tb]["by_system"][sys_name][typ].add(int(val))
+            d = highlights[tb]["by_system"][sys_name]
+            if typ not in d:
+                d[typ] = set()
+            d[typ].add(int(val))
 
     for _, r in matches_df.iterrows():
         typ = r.get("type")
@@ -323,70 +338,62 @@ def _compute_highlights(matches_df: pd.DataFrame):
         n = ctx.get("n", None)  # team/venue value
         # Routing per type
         if typ == "home-away direct" and sys_name is not None:
-            add_sys(["home", "away"], typ, sys_name, val)
+            add_sys(["home", "away"], sys_name, val, typ)
         elif typ == "venue-home direct" and sys_name is not None:
-            add_sys(["venue", "home"], typ, sys_name, val)
+            add_sys(["venue", "home"], sys_name, val, typ)
         elif typ == "venue-away direct" and sys_name is not None:
-            add_sys(["venue", "away"], typ, sys_name, val)
+            add_sys(["venue", "away"], sys_name, val, typ)
         elif typ == "value-date direct":
-            add_any(["home", "away", "venue", "date"], typ, val)
+            add_any(["home", "away", "venue", "date"], val, typ)
         elif typ == "prime-index":
             if n is not None:
-                add_any(["home", "away", "venue"], typ, n)
+                add_any(["home", "away", "venue"], n, typ)   # n in team tables
             if val is not None:
-                add_any(["date"], typ, val)   # date value equals nth prime
+                add_any(["date"], val, typ)                  # nth prime in date table
         elif typ == "prime-digit-sum":
             if n is not None:
-                add_any(["home", "away", "venue"], typ, n)
+                add_any(["home", "away", "venue"], n, typ)   # n in team tables
             if val is not None:
-                add_any(["date"], typ, val)   # date value equals digit sum
+                add_any(["date"], val, typ)                  # digit sum in date table
         elif typ == "date->prime-index->value":
-            add_any(["home", "away", "venue"], typ, val)
+            add_any(["home", "away", "venue"], val, typ)     # prime equals team/venue value
             if n is not None:
-                add_any(["date"], typ, n)     # highlight the date value n
+                add_any(["date"], n, typ)                    # date n
         elif typ == "date->prime-digit-sum->value":
-            add_any(["home", "away", "venue"], typ, val)
+            add_any(["home", "away", "venue"], val, typ)     # digit sum equals team/venue value
             if n is not None:
-                add_any(["date"], typ, n)     # highlight the date value n
-        # else: ignore unknown types
+                add_any(["date"], n, typ)                    # date n
+        # else ignore
     return highlights
 
-def _style_for_value(v, sys_name, table_label, highlights):
+def _style_for_value(v, sys_name, table_label, highlights, color_for):
     try:
         vv = int(v)
     except Exception:
         return ""
-    # Determine first matching type by PRIORITY
-    for typ in PRIORITY:
-        # system-constrained
-        if vv in highlights[table_label]["by_system"][sys_name][typ]:
-            color = PALETTE[typ]
-            return f"background-color:{color};color:white;font-weight:600"
-        # any-system
-        if vv in highlights[table_label]["any"][typ]:
-            color = PALETTE[typ]
-            return f"background-color:{color};color:white;font-weight:600"
+    # Check system-scoped first
+    bysys = highlights.get(table_label, {}).get("by_system", {}).get(sys_name, {})
+    in_sys = any(vv in s for s in bysys.values())
+    if in_sys or vv in highlights.get(table_label, {}).get("any", set()):
+        color = color_for.get(vv, "#4b5563")  # fallback gray
+        return f"background-color:{color};color:white;font-weight:600"
     return ""
 
-
-def style_date_df_with_highlights(df: pd.DataFrame, highlights):
-    disp = df.copy()
-    if "value" in disp.columns:
-        styler = disp.style.apply(lambda col: [ _style_for_value(v, "ordinal", "date", highlights) for v in col ], subset=["value"])
-        return styler
-    return disp.style
-
-
-def style_df_with_highlights(df: pd.DataFrame, table_label: str, highlights):
-    # Work on a copy without 'source' column
+def style_df_with_highlights(df: pd.DataFrame, table_label: str, highlights, color_for):
     disp = df.drop(columns=["source"], errors="ignore").copy()
     systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
     styler = disp.style
     for sys_name in systems:
         if sys_name in disp.columns:
-            styler = styler.apply(lambda col: [ _style_for_value(v, sys_name, table_label, highlights) for v in col ], subset=[sys_name])
+            styler = styler.apply(lambda col: [ _style_for_value(v, sys_name, table_label, highlights, color_for) for v in col ], subset=[sys_name])
     return styler
 
+def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for):
+    disp = df.copy()
+    if "value" in disp.columns:
+        styler = disp.style.apply(lambda col: [ _style_for_value(v, "ordinal", "date", highlights, color_for) for v in col ], subset=["value"])
+        return styler
+    return disp.style
 # --------------------
 # UI
 # --------------------
@@ -436,32 +443,33 @@ date_vals = date_numbers(game_date)
 matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
 
 hl = _compute_highlights(matches_df)
+colors_map = _build_value_colors(hl)
 st.subheader("Team Values (from all CSV columns)")
 c1, c2 = st.columns(2)
 with c1:
     st.markdown("**Home team**")
     if highlight_tables:
-        st.table(style_df_with_highlights(home_df, "home", hl))
+        st.table(style_df_with_highlights(home_df, "home", hl, colors_map))
     else:
         st.dataframe(home_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 with c2:
     st.markdown("**Away team**")
     if highlight_tables:
-        st.table(style_df_with_highlights(away_df, "away", hl))
+        st.table(style_df_with_highlights(away_df, "away", hl, colors_map))
     else:
         st.dataframe(away_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 if venue_df is not None:
     st.markdown("**Venue gematria**")
     if highlight_tables:
-        st.table(style_df_with_highlights(venue_df, "venue", hl))
+        st.table(style_df_with_highlights(venue_df, "venue", hl, colors_map))
     else:
         st.dataframe(venue_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 st.subheader("Date Numbers")
 date_df = pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_vals.values())})
 if highlight_tables:
-    st.table(style_date_df_with_highlights(date_df, hl))
+    st.table(style_date_df_with_highlights(date_df, hl, colors_map))
 else:
     st.dataframe(date_df, use_container_width=True)
 
