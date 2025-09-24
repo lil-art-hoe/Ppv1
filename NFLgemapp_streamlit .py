@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import math
@@ -226,3 +225,68 @@ else:
     st.dataframe(matches_df, use_container_width=True)
 
 st.caption("Notes: Punctuation and case are ignored in gematria. A 'prime-index' match means the team/venue value equals n and a date value equals the nth prime. 'Prime-digit-sum' means the sum of digits of that prime equals a date value.")
+
+
+def _prettify_matches(matches_df: pd.DataFrame) -> pd.DataFrame:
+    if matches_df is None or matches_df.empty:
+        return matches_df
+
+    # Extract context fields if present
+    def _ctx_val(ctx, key):
+        try:
+            return ctx.get(key) if isinstance(ctx, dict) else None
+        except Exception:
+            return None
+
+    rows = []
+    for _, r in matches_df.iterrows():
+        ctx = r.get("context", {})
+        row = {
+            "type": r.get("type"),
+            "detail": r.get("detail"),
+            "Matched Number": int(r.get("value")) if pd.notna(r.get("value")) else r.get("value"),
+            "System": _ctx_val(ctx, "system"),
+            "Team/Venue Value (n)": _ctx_val(ctx, "n"),
+            "Prime # (if applicable)": _ctx_val(ctx, "prime"),
+        }
+
+        t = row["type"]
+        if t == "home-away direct":
+            mt = "Home & Away Same Value"
+            exp = f"Both teams share {row['Matched Number']} in {row['System']}."
+        elif t == "venue-home direct":
+            mt = "Venue ↔ Home Same Value"
+            exp = f"Venue and Home share {row['Matched Number']} in {row['System']}."
+        elif t == "venue-away direct":
+            mt = "Venue ↔ Away Same Value"
+            exp = f"Venue and Away share {row['Matched Number']} in {row['System']}."
+        elif t == "value-date direct":
+            mt = "Team/Venue Value = Date Value"
+            exp = f"A team/venue gematria value equals a date-derived number."
+        elif t == "prime-index":
+            mt = "Prime Index Match"
+            exp = f"Team/Venue value n={row['Team/Venue Value (n)']} → nth prime={row['Prime # (if applicable)']} equals a date value."
+        elif t == "prime-digit-sum":
+            mt = "Prime Digit-Sum Match"
+            exp = f"Team/Venue value n={row['Team/Venue Value (n)']} → nth prime={row['Prime # (if applicable)']} → digit sum equals date value {row['Matched Number']}."
+        elif t == "date->prime-index->value":
+            mt = "Date as Prime Index"
+            exp = f"Date value n={row['Team/Venue Value (n)']} → nth prime={row['Prime # (if applicable)']} equals a team/venue value."
+        elif t == "date->prime-digit-sum->value":
+            mt = "Date as Prime Digit-Sum"
+            exp = f"Date value n={row['Team/Venue Value (n)']} → nth prime={row['Prime # (if applicable)']} → digit sum equals a team/venue value {row['Matched Number']}."
+        else:
+            mt = t or "Match"
+            exp = r.get("detail", "") or "Match"
+
+        row["Match Type"] = mt
+        row["Explanation"] = exp
+        rows.append(row)
+
+    out = pd.DataFrame(rows, columns=[
+        "Match Type", "Matched Number", "Explanation",
+        "System", "Team/Venue Value (n)", "Prime # (if applicable)"
+    ])
+    # Drop duplicates for readability
+    out = out.drop_duplicates().reset_index(drop=True)
+    return out
