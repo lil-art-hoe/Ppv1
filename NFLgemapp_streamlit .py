@@ -1,18 +1,27 @@
+
 import streamlit as st
 import pandas as pd
 import math
 from datetime import date, datetime
 from typing import Dict, List, Set
+import re
 
-st.set_page_config(page_title="NFL Gematria Matchup", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="NFL Gematria (All CSV Columns)", page_icon="🏈", layout="wide")
 
+# --------------------
+# Loading
+# --------------------
 @st.cache_data
 def load_csv(file_or_path) -> pd.DataFrame:
     df = pd.read_csv(file_or_path)
-    if "team_full" not in df.columns or "aliases" not in df.columns:
-        raise ValueError("CSV must include columns: team_full, aliases (semicolon-separated)")
+    # Require at least team_full; recommend aliases but not required now
+    if "team_full" not in df.columns:
+        raise ValueError("CSV must include at least 'team_full'. Other columns are optional.")
     return df
 
+# --------------------
+# Gematria
+# --------------------
 def _gematria_maps():
     o = {chr(i + 65): i + 1 for i in range(26)}
     ro = {chr(90 - i): i + 1 for i in range(26)}
@@ -25,7 +34,7 @@ def _gematria_maps():
 ORD, RED, RORD, RRED = _gematria_maps()
 
 def _clean_text(s: str) -> str:
-    return "".join(ch for ch in s.upper() if "A" <= ch <= "Z")
+    return "".join(ch for ch in str(s).upper() if "A" <= ch <= "Z")
 
 def gematria_scores(s: str) -> Dict[str, int]:
     t = _clean_text(s)
@@ -37,6 +46,9 @@ def gematria_scores(s: str) -> Dict[str, int]:
         "reverse_reduction": score(RRED),
     }
 
+# --------------------
+# Primes + dates
+# --------------------
 @st.cache_data
 def primes_first_n(n=1000) -> List[int]:
     limit = 90000
@@ -60,10 +72,9 @@ def digit_sum_once(n: int) -> int:
 def date_numbers(dt: date) -> Dict[str, int]:
     m, d, yyyy = dt.month, dt.day, dt.year
     yy = yyyy % 100
-
     nums = {
         "(m)+(d)+(20)+(yy)": m + d + 20 + yy,
-        "(m)+(d)+y-digit-sum": m + d + sum(int(x) for x in str(yyyy)),
+        "(m)+(d)+y-digit-sum)": m + d + sum(int(x) for x in str(yyyy)),
         "m+d+y-digit-sum (all digits)": sum(int(x) for x in f"{m}{d}{yyyy}"),
         "(m)+(d)+(yy)": m + d + yy,
         "m+d+yy-digit-sum (all digits)": sum(int(x) for x in f"{m}{d}{yy}"),
@@ -74,36 +85,72 @@ def date_numbers(dt: date) -> Dict[str, int]:
         "(m)+(d)+y-last-two-digits": m + d + (yy // 10) + (yy % 10),
         "m+d+(yy)": m + d + yy,
     }
-
     digits_all = [int(c) for c in f"{m}{d}{yyyy}" if c != "0"]
     digits_no_century = [int(c) for c in f"{m}{d}{yy}" if c != "0"]
     nums["product_all_digits(m,d,20,yy)"] = math.prod(digits_all) if digits_all else 0
     nums["product_all_digits(m,d,yy)"] = math.prod(digits_no_century) if digits_no_century else 0
     return nums
 
-def aliases_for_team(team_query: str, teams_df: pd.DataFrame) -> List[str]:
-    row = teams_df[teams_df["team_full"].str.lower() == team_query.lower()]
-    if row.empty:
-        row = teams_df[teams_df["team_full"].str.lower().str.contains(team_query.lower())]
-    if row.empty:
-        return [team_query]
-    row = row.iloc[0]
-    aliases = [a.strip() for a in str(row["aliases"]).split(";") if a.strip()]
-    seen = set()
-    ordered = []
-    for a in aliases:
-        if a not in seen:
-            seen.add(a)
-            ordered.append(a)
-    return ordered
+# --------------------
+# Name extraction from ALL columns
+# --------------------
+def extract_names_from_row(row: pd.Series) -> List[Dict[str, str]]:
+    """
+    Returns list of dicts: {"source": <column_name or 'aliases'>, "name": <string>}
+    Includes every non-empty text cell. If the column is 'aliases', splits on ';' or ','.
+    Dedupes by normalized text (gematria-cleaned), but keeps a merged 'source' list.
+    """
+    names = []
+    # First pass: collect raw entries
+    for col in row.index:
+        val = row[col]
+        if pd.isna(val):
+            continue
+        if isinstance(val, (int, float)):
+            # ignore pure numeric cells
+            continue
+        text = str(val).strip()
+        if not text:
+            continue
 
-def build_name_table(name_list: List[str]) -> pd.DataFrame:
+        if str(col).lower() == "aliases":
+            parts = [p.strip() for p in re.split(r"[;,]", text) if p.strip()]
+            for p in parts:
+                names.append({"source": "aliases", "name": p})
+        else:
+            names.append({"source": str(col), "name": text})
+
+    # Second pass: dedupe by cleaned canonical form, merge sources
+    by_key = {}
+    for item in names:
+        key = _clean_text(item["name"])
+        if not key:
+            continue
+        if key not in by_key:
+            by_key[key] = {"name": item["name"], "sources": [item["source"]]}
+        else:
+            if item["source"] not in by_key[key]["sources"]:
+                by_key[key]["sources"].append(item["source"])
+
+    out = []
+    for key, obj in by_key.items():
+        out.append({"source": ", ".join(obj["sources"]), "name": obj["name"]})
+    return out
+
+def build_name_table_from_row(row: pd.Series) -> pd.DataFrame:
+    items = extract_names_from_row(row)
     rows = []
-    for n in name_list:
-        scores = gematria_scores(n)
-        rows.append({"name": n, **scores})
-    return pd.DataFrame(rows)
+    for it in items:
+        scores = gematria_scores(it["name"])
+        rows.append({"source": it["source"], "name": it["name"], **scores})
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(by=["source", "name"]).reset_index(drop=True)
+    return df
 
+# --------------------
+# Matching logic
+# --------------------
 def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[str, int], venue_df: pd.DataFrame | None = None) -> pd.DataFrame:
     def values_from(df: pd.DataFrame) -> Dict[str, Set[int]]:
         v = {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
@@ -135,12 +182,12 @@ def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[s
         for val in sorted(inter_away):
             record("venue-away direct", sys, val, {"system": sys})
 
-    all_team_vals = set().union(*home_vals.values()).union(*away_vals.values()).union(*venue_vals.values())
-    for val in sorted(all_team_vals):
+    all_vals = set().union(*home_vals.values()).union(*away_vals.values()).union(*venue_vals.values())
+    for val in sorted(all_vals):
         if val in date_values_set:
             record("value-date direct", "any system", val, {})
 
-    for val in sorted(all_team_vals):
+    for val in sorted(all_vals):
         if val in PRIME_INDEX:
             p = PRIME_INDEX[val]
             if p in date_values_set:
@@ -152,86 +199,21 @@ def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[s
     for dv in sorted(date_values_set):
         if dv in PRIME_INDEX:
             p = PRIME_INDEX[dv]
-            if p in all_team_vals:
+            if p in all_vals:
                 record("date->prime-index->value", "prime(date_value) equals team/venue value", p, {"n": dv, "prime": p})
             s = digit_sum_once(p)
-            if s in all_team_vals:
+            if s in all_vals:
                 record("date->prime-digit-sum->value", "sum(digits(prime(date_value))) equals team/venue value", s, {"n": dv, "prime": p})
 
     return pd.DataFrame(matches)
 
-st.sidebar.header("Settings")
-default_path = "nfl_teams_aliases_3.csv"  # points to the 3-alias CSV
-file = st.sidebar.file_uploader("Upload team aliases CSV", type=["csv"], help="CSV columns: team_full, aliases (semicolon-separated).")
-csv_path_info = st.sidebar.text_input("Or type a CSV path", value=default_path)
-
-teams_df = None
-try:
-    if file is not None:
-        teams_df = load_csv(file)
-    else:
-        teams_df = load_csv(csv_path_info)
-except Exception as e:
-    st.sidebar.error(f"CSV load error: {e}")
-
-st.title("🏈 NFL Gematria Matchup")
-st.caption("Simple version (uses exactly what you provide in 'aliases').")
-
-if teams_df is None:
-    st.warning("Please upload a valid CSV or provide a correct path in the sidebar.")
-    st.stop()
-
-colA, colB = st.columns(2)
-with colA:
-    home_team = st.selectbox("Home team", options=sorted(teams_df["team_full"].unique()))
-with colB:
-    away_team = st.selectbox("Away team", options=sorted(teams_df["team_full"].unique()))
-
-game_date = st.date_input("Game date", value=date.today())
-venue = st.text_input("Venue (City / Stadium)", value="", placeholder="e.g., SoFi Stadium, Inglewood, CA")
-
-home_aliases = aliases_for_team(home_team, teams_df)
-away_aliases = aliases_for_team(away_team, teams_df)
-home_df = build_name_table(home_aliases)
-away_df = build_name_table(away_aliases)
-
-venue_df = None
-if venue.strip():
-    venue_df = build_name_table([venue.strip()])
-
-date_vals = date_numbers(game_date)
-
-st.subheader("Team Alias Tables")
-c1, c2 = st.columns(2)
-with c1:
-    st.markdown("**Home team aliases & gematria**")
-    st.dataframe(home_df, use_container_width=True)
-with c2:
-    st.markdown("**Away team aliases & gematria**")
-    st.dataframe(away_df, use_container_width=True)
-
-if venue_df is not None:
-    st.markdown("**Venue gematria**")
-    st.dataframe(venue_df, use_container_width=True)
-
-st.subheader("Date Numbers")
-st.dataframe(pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_vals.values())}), use_container_width=True)
-
-matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
-st.subheader("Matches")
-if matches_df.empty:
-    st.info("No matches found with the current inputs.")
-else:
-    st.dataframe(matches_df, use_container_width=True)
-
-st.caption("Notes: Punctuation and case are ignored in gematria. A 'prime-index' match means the team/venue value equals n and a date value equals the nth prime. 'Prime-digit-sum' means the sum of digits of that prime equals a date value.")
-
-
+# --------------------
+# Pretty Matches
+# --------------------
 def _prettify_matches(matches_df: pd.DataFrame) -> pd.DataFrame:
     if matches_df is None or matches_df.empty:
         return matches_df
 
-    # Extract context fields if present
     def _ctx_val(ctx, key):
         try:
             return ctx.get(key) if isinstance(ctx, dict) else None
@@ -286,7 +268,75 @@ def _prettify_matches(matches_df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(rows, columns=[
         "Match Type", "Matched Number", "Explanation",
         "System", "Team/Venue Value (n)", "Prime # (if applicable)"
-    ])
-    # Drop duplicates for readability
-    out = out.drop_duplicates().reset_index(drop=True)
+    ]).drop_duplicates().reset_index(drop=True)
     return out
+
+# --------------------
+# UI
+# --------------------
+st.sidebar.header("Settings")
+default_path = "nfl_teams_aliases_3_with_state.csv"
+file = st.sidebar.file_uploader("Upload team CSV", type=["csv"], help="Any columns are allowed. At minimum include team_full.")
+csv_path_info = st.sidebar.text_input("Or type a CSV path", value=default_path)
+
+teams_df = None
+try:
+    if file is not None:
+        teams_df = load_csv(file)
+    else:
+        teams_df = load_csv(csv_path_info)
+except Exception as e:
+    st.sidebar.error(f"CSV load error: {e}")
+
+st.title("🏈 NFL Gematria — All CSV Columns")
+st.caption("Build gematria tables from every text column in your CSV (city, state, abbr, nickname, abbr_nickname, team_full, aliases, etc.).")
+
+if teams_df is None:
+    st.warning("Please upload a valid CSV or provide a correct path in the sidebar.")
+    st.stop()
+
+colA, colB = st.columns(2)
+with colA:
+    home_team = st.selectbox("Home team", options=sorted(teams_df["team_full"].astype(str).unique()))
+with colB:
+    away_team = st.selectbox("Away team", options=sorted(teams_df["team_full"].astype(str).unique()))
+
+game_date = st.date_input("Game date", value=date.today())
+venue = st.text_input("Venue (City / Stadium)", value="", placeholder="e.g., SoFi Stadium, Inglewood, CA")
+
+home_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(home_team).lower()].iloc[0]
+away_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(away_team).lower()].iloc[0]
+
+home_df = build_name_table_from_row(home_row)
+away_df = build_name_table_from_row(away_row)
+
+venue_df = None
+if venue.strip():
+    venue_df = pd.DataFrame([{"source": "venue", "name": venue.strip(), **gematria_scores(venue.strip())}])
+
+date_vals = date_numbers(game_date)
+
+st.subheader("Team Values (from all CSV columns)")
+c1, c2 = st.columns(2)
+with c1:
+    st.markdown("**Home team**")
+    st.dataframe(home_df, use_container_width=True)
+with c2:
+    st.markdown("**Away team**")
+    st.dataframe(away_df, use_container_width=True)
+
+if venue_df is not None:
+    st.markdown("**Venue gematria**")
+    st.dataframe(venue_df, use_container_width=True)
+
+st.subheader("Date Numbers")
+st.dataframe(pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_vals.values())}), use_container_width=True)
+
+matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
+st.subheader("Matches")
+if matches_df.empty:
+    st.info("No matches found with the current inputs.")
+else:
+    st.dataframe(_prettify_matches(matches_df), use_container_width=True)
+
+st.caption("Notes: All non-empty text cells are included. 'aliases' is split on ';' or ','. Duplicates are removed based on case/punctuation-insensitive comparison.")
