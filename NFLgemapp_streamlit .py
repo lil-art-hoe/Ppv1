@@ -320,14 +320,14 @@ st.subheader("Team Values (from all CSV columns)")
 c1, c2 = st.columns(2)
 with c1:
     st.markdown("**Home team**")
-    st.dataframe(home_df, use_container_width=True)
+    st.dataframe(home_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 with c2:
     st.markdown("**Away team**")
-    st.dataframe(away_df, use_container_width=True)
+    st.dataframe(away_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 if venue_df is not None:
     st.markdown("**Venue gematria**")
-    st.dataframe(venue_df, use_container_width=True)
+    st.dataframe(venue_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 st.subheader("Date Numbers")
 st.dataframe(pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_vals.values())}), use_container_width=True)
