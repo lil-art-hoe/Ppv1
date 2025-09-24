@@ -551,6 +551,24 @@ def style_summary_with_colors(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
         return styler
     return disp.style
 
+
+def style_matches_df_with_highlights(df: pd.DataFrame, color_for: dict) -> "pd.io.formats.style.Styler":
+    disp = df.copy()
+    cols_to_color = ["Matched Number", "Team/Venue Value (n)", "Prime # (if applicable)"]
+    def _style_num(v):
+        try:
+            vv = int(v)
+        except Exception:
+            return ""
+        vvz = _zero_free_int(vv)
+        color = color_for.get(vvz, None)
+        return f"background-color:{color};color:white;font-weight:600" if color else ""
+    styler = disp.style
+    for col in cols_to_color:
+        if col in disp.columns:
+            styler = styler.apply(lambda c: [_style_num(v) for v in c], subset=[col])
+    return styler
+
 # --------------------
 # UI
 # --------------------
@@ -667,6 +685,6 @@ st.subheader("Matches")
 if matches_df.empty:
     st.info("No matches found with the current inputs.")
 else:
-    st.dataframe(_prettify_matches(matches_df), use_container_width=True)
+    st.table(style_matches_df_with_highlights(_prettify_matches(matches_df), colors_map))
 
 st.caption("Notes: All non-empty text cells are included. 'aliases' is split on ';' or ','. Duplicates are removed based on case/punctuation-insensitive comparison.")
