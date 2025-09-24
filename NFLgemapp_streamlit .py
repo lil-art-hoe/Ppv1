@@ -4,7 +4,7 @@ import pandas as pd
 import math
 from datetime import date, datetime
 from typing import Dict, List, Set
-import re
+import re, colorsys
 
 st.set_page_config(page_title="NFL Gematria (All CSV Columns)", page_icon="🏈", layout="wide")
 
@@ -14,7 +14,6 @@ st.set_page_config(page_title="NFL Gematria (All CSV Columns)", page_icon="🏈"
 @st.cache_data
 def load_csv(file_or_path) -> pd.DataFrame:
     df = pd.read_csv(file_or_path)
-    # Require at least team_full; recommend aliases but not required now
     if "team_full" not in df.columns:
         raise ValueError("CSV must include at least 'team_full'. Other columns are optional.")
     return df
@@ -78,7 +77,7 @@ def date_numbers(dt: date) -> Dict[str, int]:
     yy = yyyy % 100
     nums = {
         "(m)+(d)+(20)+(yy)": m + d + 20 + yy,
-        "(m)+(d)+y-digit-sum)": m + d + sum(int(x) for x in str(yyyy)),
+        "(m)+(d)+y-digit-sum": m + d + sum(int(x) for x in str(yyyy)),
         "m+d+y-digit-sum (all digits)": sum(int(x) for x in f"{m}{d}{yyyy}"),
         "(m)+(d)+(yy)": m + d + yy,
         "m+d+yy-digit-sum (all digits)": sum(int(x) for x in f"{m}{d}{yy}"),
@@ -96,35 +95,26 @@ def date_numbers(dt: date) -> Dict[str, int]:
     return nums
 
 # --------------------
-# Name extraction from ALL columns
+# Name extraction (use every text column)
 # --------------------
 def extract_names_from_row(row: pd.Series) -> List[Dict[str, str]]:
-    """
-    Returns list of dicts: {"source": <column_name or 'aliases'>, "name": <string>}
-    Includes every non-empty text cell. If the column is 'aliases', splits on ';' or ','.
-    Dedupes by normalized text (gematria-cleaned), but keeps a merged 'source' list.
-    """
     names = []
-    # First pass: collect raw entries
     for col in row.index:
         val = row[col]
         if pd.isna(val):
             continue
         if isinstance(val, (int, float)):
-            # ignore pure numeric cells
             continue
         text = str(val).strip()
         if not text:
             continue
-
         if str(col).lower() == "aliases":
             parts = [p.strip() for p in re.split(r"[;,]", text) if p.strip()]
             for p in parts:
                 names.append({"source": "aliases", "name": p})
         else:
             names.append({"source": str(col), "name": text})
-
-    # Second pass: dedupe by cleaned canonical form, merge sources
+    # dedupe ignoring punctuation/case
     by_key = {}
     for item in names:
         key = _clean_text(item["name"])
@@ -135,11 +125,7 @@ def extract_names_from_row(row: pd.Series) -> List[Dict[str, str]]:
         else:
             if item["source"] not in by_key[key]["sources"]:
                 by_key[key]["sources"].append(item["source"])
-
-    out = []
-    for key, obj in by_key.items():
-        out.append({"source": ", ".join(obj["sources"]), "name": obj["name"]})
-    return out
+    return [{"source": ", ".join(v["sources"]), "name": v["name"]} for v in by_key.values()]
 
 def build_name_table_from_row(row: pd.Series) -> pd.DataFrame:
     items = extract_names_from_row(row)
@@ -149,13 +135,12 @@ def build_name_table_from_row(row: pd.Series) -> pd.DataFrame:
         rows.append({"source": it["source"], "name": it["name"], **scores})
     df = pd.DataFrame(rows)
     if not df.empty:
-        df = df.sort_values(by=["source", "name"]).reset_index(drop=True)
+        df = df.sort_values(by=["name"]).reset_index(drop=True)
     return df
 
 # --------------------
-# Matching logic
+# Matching logic (zero-insensitive)
 # --------------------
-
 def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[str, int], venue_df: pd.DataFrame | None = None) -> pd.DataFrame:
     def values_from(df: pd.DataFrame) -> Dict[str, Set[int]]:
         v = {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
@@ -168,7 +153,6 @@ def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[s
     away_vals = values_from(away_df) if away_df is not None else {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
     venue_vals = values_from(venue_df) if venue_df is not None else {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
 
-    # Build date value sets (raw and zero-free)
     date_values = list(date_nums.values())
     date_set_raw: Set[int] = set(int(x) for x in date_values)
     date_set_zf: Set[int] = set(_zero_free_int(int(x)) for x in date_values)
@@ -178,7 +162,7 @@ def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[s
     def record(match_type, detail, value, context):
         matches.append({"type": match_type, "detail": detail, "value": int(value), "context": context})
 
-    # Direct matches between home & away by system
+    # Direct home-away matches by system
     for sys in home_vals.keys():
         inter = home_vals[sys].intersection(away_vals[sys])
         for val in sorted(inter):
@@ -193,7 +177,7 @@ def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[s
         for val in sorted(inter_away):
             record("venue-away direct", sys, val, {"system": sys})
 
-    # Aggregate all team/venue values
+    # Aggregate values
     all_team_vals = set().union(*home_vals.values()).union(*away_vals.values()).union(*venue_vals.values())
     all_team_vals_zf = set(_zero_free_int(v) for v in all_team_vals)
 
@@ -202,18 +186,17 @@ def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[s
         if (val in date_set_raw) or (_zero_free_int(val) in date_set_zf):
             record("value-date direct", "any system", val, {})
 
-    # Prime index & digit-sum (date compared zero-insensitively to prime values)
+    # Prime index & digit-sum
     for val in sorted(all_team_vals):
         if val in PRIME_INDEX:
             p = PRIME_INDEX[val]
             ds = digit_sum_once(p)
-            # Compare date values to p and digit sum, zero-insensitive
             if (p in date_set_raw) or (_zero_free_int(p) in date_set_zf):
                 record("prime-index", f"nth prime where n={val}", p, {"n": val, "prime": p})
             if (ds in date_set_raw) or (_zero_free_int(ds) in date_set_zf):
                 record("prime-digit-sum", f"sum(digits(prime(n))) where n={val}", ds, {"n": val, "prime": p})
 
-    # Reverse: date (zero-free) acts as n
+    # Reverse: date as n (zero-free n)
     for dv in sorted(date_set_raw):
         n = _zero_free_int(dv)
         if n in PRIME_INDEX:
@@ -225,7 +208,6 @@ def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[s
                 record("date->prime-digit-sum->value", "sum(digits(prime(date_value))) equals team/venue value", ds, {"n": n, "prime": p})
 
     return pd.DataFrame(matches)
-
 
 # --------------------
 # Pretty Matches
@@ -291,55 +273,24 @@ def _prettify_matches(matches_df: pd.DataFrame) -> pd.DataFrame:
     ]).drop_duplicates().reset_index(drop=True)
     return out
 
-
-
 # --------------------
 # Highlighting utilities (per-integer colors)
 # --------------------
-import colorsys
-
 def _int_to_hex_color(n: int) -> str:
-    # Deterministic distinct-ish color per integer using the golden angle on the hue wheel.
-    # colorsys uses HLS: (h, l, s). We'll keep good contrast for table backgrounds.
-    h = (n * 0.61803398875) % 1.0          # wrap hue
-    l = 0.38                                # lightness (0..1)
-    s = 0.70                                # saturation (0..1)
+    h = (n * 0.61803398875) % 1.0
+    l = 0.38
+    s = 0.70
     r, g, b = colorsys.hls_to_rgb(h, l, s)
     return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
-
-def _collect_values(highlights):
-    vals = set()
-    for tb, obj in highlights.items():
-        # any-set
-        for v in obj.get("any", set()):
-            vals.add(int(v))
-        # per-system
-        for sysname, d in obj.get("by_system", {}).items():
-            for typ, s in d.items():
-                for v in s:
-                    vals.add(int(v))
-    # normalize to zero-free
-    return set(_zero_free_int(v) for v in vals)
-
-def _build_value_colors(highlights):
-    # Map every participating integer to a unique color
-    values = sorted(_collect_values(highlights))
-    return {v: _int_to_hex_color(v) for v in sorted(values)}
-
-def _empty_highlights():
-    systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
-    tables = ["home", "away", "venue", "date"]
-    return {t: {"by_system": {s: {} for s in systems}, "any": set()} for t in tables}
 
 def _compute_highlights(matches_df: pd.DataFrame):
     systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
     tables = ["home", "away", "venue", "date"]
     highlights = {t: {"by_system": {s: {} for s in systems}, "any": set()} for t in tables}
-    # Each by_system dict holds {match_type: set(values)} though we won't color by type anymore.
     if matches_df is None or matches_df.empty:
         return highlights
 
-    def add_any(tables_sel, val, typ):
+    def add_any(tables_sel, val):
         for tb in tables_sel:
             highlights[tb]["any"].add(_zero_free_int(int(val)))
 
@@ -356,8 +307,7 @@ def _compute_highlights(matches_df: pd.DataFrame):
         val = r.get("value")
         ctx = r.get("context", {}) if isinstance(r.get("context", {}), dict) else {}
         sys_name = ctx.get("system", None)
-        n = ctx.get("n", None)  # team/venue value
-        # Routing per type
+        n = ctx.get("n", None)
         if typ == "home-away direct" and sys_name is not None:
             add_sys(["home", "away"], sys_name, val, typ)
         elif typ == "venue-home direct" and sys_name is not None:
@@ -365,27 +315,39 @@ def _compute_highlights(matches_df: pd.DataFrame):
         elif typ == "venue-away direct" and sys_name is not None:
             add_sys(["venue", "away"], sys_name, val, typ)
         elif typ == "value-date direct":
-            add_any(["home", "away", "venue", "date"], val, typ)
+            add_any(["home", "away", "venue", "date"], val)
         elif typ == "prime-index":
             if n is not None:
-                add_any(["home", "away", "venue"], n, typ)   # n in team tables
+                add_any(["home", "away", "venue"], n)
             if val is not None:
-                add_any(["date"], val, typ)                  # nth prime in date table
+                add_any(["date"], val)
         elif typ == "prime-digit-sum":
             if n is not None:
-                add_any(["home", "away", "venue"], n, typ)   # n in team tables
+                add_any(["home", "away", "venue"], n)
             if val is not None:
-                add_any(["date"], val, typ)                  # digit sum in date table
+                add_any(["date"], val)
         elif typ == "date->prime-index->value":
-            add_any(["home", "away", "venue"], val, typ)     # prime equals team/venue value
+            add_any(["home", "away", "venue"], val)
             if n is not None:
-                add_any(["date"], n, typ)                    # date n
+                add_any(["date"], n)
         elif typ == "date->prime-digit-sum->value":
-            add_any(["home", "away", "venue"], val, typ)     # digit sum equals team/venue value
+            add_any(["home", "away", "venue"], val)
             if n is not None:
-                add_any(["date"], n, typ)                    # date n
-        # else ignore
+                add_any(["date"], n)
     return highlights
+
+def _collect_values(highlights):
+    vals = set()
+    for tb, obj in highlights.items():
+        vals |= set(obj.get("any", set()))
+        for sysname, d in obj.get("by_system", {}).items():
+            for s in d.values():
+                vals |= set(s)
+    return set(_zero_free_int(v) for v in vals)
+
+def _build_value_colors(highlights):
+    values = sorted(_collect_values(highlights))
+    return {v: _int_to_hex_color(v) for v in values}
 
 def _style_for_value(v, sys_name, table_label, highlights, color_for):
     try:
@@ -409,17 +371,15 @@ def style_df_with_highlights(df: pd.DataFrame, table_label: str, highlights, col
             styler = styler.apply(lambda col: [ _style_for_value(v, sys_name, table_label, highlights, color_for) for v in col ], subset=[sys_name])
     return styler
 
-
 def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for):
     disp = df.copy()
-    # Collect exactly the numbers that should be highlighted in the DATE table
+    # Only highlight numbers that actually participate in matches
     date_any = set(highlights.get("date", {}).get("any", set()))
     date_sys_union = set()
     for sysname, d in highlights.get("date", {}).get("by_system", {}).items():
         for s in d.values():
             date_sys_union |= set(s)
     allowed = date_any | date_sys_union
-
     def _style_date_cell(v):
         try:
             vv = int(v)
@@ -430,12 +390,10 @@ def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for):
             color = color_for.get(vvz, "#4b5563")
             return f"background-color:{color};color:white;font-weight:600"
         return ""
-
     if "value" in disp.columns:
         styler = disp.style.apply(lambda col: [_style_date_cell(v) for v in col], subset=["value"])
         return styler
     return disp.style
-
 
 def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -454,7 +412,6 @@ def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["prime", "n", "digit_sum", "from"])
     dfp = pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
     return dfp
-
 
 def style_primes_df_with_highlights(df: pd.DataFrame, color_for):
     disp = df.copy()
@@ -480,8 +437,6 @@ def style_primes_df_with_highlights(df: pd.DataFrame, color_for):
             styler = styler.format(_fmt_num, subset=[col])
     return styler
 
-
-
 def _tables_for_number(vz, highlights):
     present = []
     for tb in ["home", "away", "venue", "date"]:
@@ -503,22 +458,16 @@ def build_match_summary(matches_df: pd.DataFrame, highlights, color_for: dict) -
             rows[vz] = {"number": vz, "color": color_for.get(vz, "#4b5563"),
                         "appears_in": set(), "categories": set(), "prime_links": set(), "systems": {"home": set(), "away": set(), "venue": set()}}
         r = rows[vz]
-        # tables
         for tb in _tables_for_number(vz, highlights):
             r["appears_in"].add(tb)
-        # categories
         if "cat" in kw and kw["cat"]:
             r["categories"].add(kw["cat"])
-        # prime links
         if "prime" in kw and kw["prime"] is not None and "n" in kw:
-            p = int(kw["prime"])
-            n = int(kw["n"]) if kw["n"] is not None else None
+            p = int(kw["prime"]); n = int(kw["n"]) if kw["n"] is not None else None
             ds = digit_sum_once(p)
             r["prime_links"].add(f"n={n} → prime={p} (ds={ds})")
-        # systems
         if "system" in kw and kw["system"] and "who" in kw:
-            who = kw["who"]
-            sysn = kw["system"]
+            who = kw["who"]; sysn = kw["system"]
             if who in r["systems"]:
                 r["systems"][who].add(sysn)
 
@@ -530,9 +479,7 @@ def build_match_summary(matches_df: pd.DataFrame, highlights, color_for: dict) -
         sysn = ctx.get("system", None)
         n = ctx.get("n", None)
         prime = ctx.get("prime", None)
-        # Always add the row for value's zero-free number
         add_row(vz, cat=typ, system=sysn, who=("home" if typ=="venue-home direct" else "away" if typ=="venue-away direct" else None), n=n, prime=prime)
-        # For prime-related events also add the zero-free(n)
         if typ in ("prime-index", "prime-digit-sum", "date->prime-index->value", "date->prime-digit-sum->value"):
             if n is not None:
                 add_row(_zero_free_int(int(n)), cat=typ, system=sysn, who=None, n=n, prime=prime)
@@ -541,7 +488,6 @@ def build_match_summary(matches_df: pd.DataFrame, highlights, color_for: dict) -
             if typ in ("prime-digit-sum", "date->prime-digit-sum->value") and prime is not None:
                 add_row(_zero_free_int(digit_sum_once(int(prime))), cat=typ, system=None, who=None, n=n, prime=prime)
 
-    # materialize rows
     out_rows = []
     for vz, r in rows.items():
         appears = ", ".join(k.capitalize() for k in ["home","away","venue","date"] if k in r["appears_in"])
@@ -551,7 +497,6 @@ def build_match_summary(matches_df: pd.DataFrame, highlights, color_for: dict) -
         out_rows.append({"Number": vz, "Color": r["color"], "Appears In": appears, "Categories": cats, "Systems": systems_str, "Prime Links": prime_links})
     df = pd.DataFrame(out_rows).sort_values(by="Number").reset_index(drop=True)
     return df
-
 
 def style_summary_with_colors(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
     disp = df.copy()
@@ -570,10 +515,6 @@ def style_summary_with_colors(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
     if "Number" in disp.columns:
         styler = styler.format(_fmt_num, subset=["Number"])
     return styler
-
-    return disp.style
-
-
 
 def style_matches_df_with_highlights(df: pd.DataFrame, color_for: dict) -> "pd.io.formats.style.Styler":
     disp = df.copy()
@@ -601,7 +542,6 @@ def style_matches_df_with_highlights(df: pd.DataFrame, color_for: dict) -> "pd.i
             styler = styler.apply(lambda c: [_style_num(v) for v in c], subset=[col])
             styler = styler.format(_fmt_num, subset=[col])
     return styler
-
 
 # --------------------
 # UI
@@ -643,23 +583,19 @@ home_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(home_te
 away_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(away_team).lower()].iloc[0]
 
 home_df = build_name_table_from_row(home_row)
-
 away_df = build_name_table_from_row(away_row)
 
-# Append QB rows if provided (treated as additional team names)
 def _append_qb(df, qb_name: str):
     qb = qb_name.strip()
     if qb:
         scores = gematria_scores(qb)
         row = {"source": "QB", "name": qb, **scores}
-        # Avoid duplicate names (case-insensitive) already present
         if "name" in df.columns and not df["name"].str.lower().eq(qb.lower()).any():
             return pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     return df
 
 home_df = _append_qb(home_df, home_qb)
 away_df = _append_qb(away_df, away_qb)
-
 
 venue_df = None
 if venue.strip():
@@ -669,9 +605,14 @@ date_vals = date_numbers(game_date)
 
 matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
 
+# Remove direct team-vs-team matches as requested
+if isinstance(matches_df, pd.DataFrame) and 'type' in matches_df.columns:
+    matches_df = matches_df[matches_df['type'] != 'home-away direct'].reset_index(drop=True)
+
 hl = _compute_highlights(matches_df)
 colors_map = _build_value_colors(hl)
 primes_df = build_prime_hits(matches_df)
+
 st.subheader("Team Values (from all CSV columns)")
 c1, c2 = st.columns(2)
 with c1:
@@ -701,7 +642,6 @@ if highlight_tables:
 else:
     st.dataframe(date_df, use_container_width=True)
 
-matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
 st.subheader("Prime Hits")
 if primes_df is None or primes_df.empty:
     st.caption("No prime-related matches.")
