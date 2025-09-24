@@ -271,6 +271,105 @@ def _prettify_matches(matches_df: pd.DataFrame) -> pd.DataFrame:
     ]).drop_duplicates().reset_index(drop=True)
     return out
 
+
+# --------------------
+# Highlighting utilities
+# --------------------
+PALETTE = {
+    "home-away direct": "#10b981",             # emerald
+    "venue-home direct": "#6366f1",            # indigo
+    "venue-away direct": "#6366f1",            # indigo
+    "value-date direct": "#6b7280",            # gray
+    "prime-index": "#06b6d4",                  # cyan
+    "prime-digit-sum": "#f97316",              # orange
+    "date->prime-index->value": "#22c55e",     # green
+    "date->prime-digit-sum->value": "#d946ef", # fuchsia
+}
+PRIORITY = [
+    "home-away direct",
+    "prime-index",
+    "prime-digit-sum",
+    "date->prime-index->value",
+    "date->prime-digit-sum->value",
+    "venue-home direct",
+    "venue-away direct",
+    "value-date direct",
+]
+
+def _compute_highlights(matches_df: pd.DataFrame):
+    # Prepare containers: per-table, per-system, and any-system
+    systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
+    tables = ["home", "away", "venue"]
+    highlights = {t: {"by_system": {s: {typ: set() for typ in PALETTE} for s in systems},
+                      "any": {typ: set() for typ in PALETTE}} for t in tables}
+
+    if matches_df is None or matches_df.empty:
+        return highlights
+
+    def add_any(tables_sel, typ, val):
+        for tb in tables_sel:
+            highlights[tb]["any"][typ].add(int(val))
+
+    def add_sys(tables_sel, typ, sys_name, val):
+        sys_name = str(sys_name)
+        for tb in tables_sel:
+            highlights[tb]["by_system"][sys_name][typ].add(int(val))
+
+    for _, r in matches_df.iterrows():
+        typ = r.get("type")
+        val = r.get("value")
+        ctx = r.get("context", {}) if isinstance(r.get("context", {}), dict) else {}
+        sys_name = ctx.get("system", None)
+        n = ctx.get("n", None)  # team/venue value
+        # Routing per type
+        if typ == "home-away direct" and sys_name is not None:
+            add_sys(["home", "away"], typ, sys_name, val)
+        elif typ == "venue-home direct" and sys_name is not None:
+            add_sys(["venue", "home"], typ, sys_name, val)
+        elif typ == "venue-away direct" and sys_name is not None:
+            add_sys(["venue", "away"], typ, sys_name, val)
+        elif typ == "value-date direct":
+            add_any(["home", "away", "venue"], typ, val)
+        elif typ == "prime-index":
+            if n is not None:
+                add_any(["home", "away", "venue"], typ, n)   # highlight team/venue value n
+        elif typ == "prime-digit-sum":
+            if n is not None:
+                add_any(["home", "away", "venue"], typ, n)
+        elif typ == "date->prime-index->value":
+            add_any(["home", "away", "venue"], typ, val)     # highlight the team/venue value (which equals prime)
+        elif typ == "date->prime-digit-sum->value":
+            add_any(["home", "away", "venue"], typ, val)     # highlight the digit-sum that equals a team/venue value
+        # else: ignore unknown types
+    return highlights
+
+def _style_for_value(v, sys_name, table_label, highlights):
+    try:
+        vv = int(v)
+    except Exception:
+        return ""
+    # Determine first matching type by PRIORITY
+    for typ in PRIORITY:
+        # system-constrained
+        if vv in highlights[table_label]["by_system"][sys_name][typ]:
+            color = PALETTE[typ]
+            return f"background-color:{color};color:white;font-weight:600"
+        # any-system
+        if vv in highlights[table_label]["any"][typ]:
+            color = PALETTE[typ]
+            return f"background-color:{color};color:white;font-weight:600"
+    return ""
+
+def style_df_with_highlights(df: pd.DataFrame, table_label: str, highlights):
+    # Work on a copy without 'source' column
+    disp = df.drop(columns=["source"], errors="ignore").copy()
+    systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
+    styler = disp.style
+    for sys_name in systems:
+        if sys_name in disp.columns:
+            styler = styler.apply(lambda col: [ _style_for_value(v, sys_name, table_label, highlights) for v in col ], subset=[sys_name])
+    return styler
+
 # --------------------
 # UI
 # --------------------
@@ -278,6 +377,7 @@ st.sidebar.header("Settings")
 default_path = "nfl_teams_aliases_3_with_state.csv"
 file = st.sidebar.file_uploader("Upload team CSV", type=["csv"], help="Any columns are allowed. At minimum include team_full.")
 csv_path_info = st.sidebar.text_input("Or type a CSV path", value=default_path)
+highlight_tables = st.sidebar.checkbox("Highlight matches in tables", value=True)
 
 teams_df = None
 try:
@@ -320,14 +420,23 @@ st.subheader("Team Values (from all CSV columns)")
 c1, c2 = st.columns(2)
 with c1:
     st.markdown("**Home team**")
-    st.dataframe(home_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
+    if highlight_tables:
+        st.table(style_df_with_highlights(home_df, "home", _compute_highlights(matches_df)))
+    else:
+        st.dataframe(home_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 with c2:
     st.markdown("**Away team**")
-    st.dataframe(away_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
+    if highlight_tables:
+        st.table(style_df_with_highlights(away_df, "away", _compute_highlights(matches_df)))
+    else:
+        st.dataframe(away_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 if venue_df is not None:
     st.markdown("**Venue gematria**")
-    st.dataframe(venue_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
+    if highlight_tables:
+        st.table(style_df_with_highlights(venue_df, "venue", _compute_highlights(matches_df)))
+    else:
+        st.dataframe(venue_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 st.subheader("Date Numbers")
 st.dataframe(pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_vals.values())}), use_container_width=True)
