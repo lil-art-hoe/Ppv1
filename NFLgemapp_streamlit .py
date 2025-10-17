@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import math
@@ -399,10 +398,71 @@ def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for, focus
         if vvz in focus_set and vvz != 0:
             return "border:2px solid #ef4444"
         return ""
+    def _fmt_num(v):
+        try:
+            if pd.isna(v): return ""
+            return f"{int(v)}"
+        except Exception:
+            return v
     if "value" in disp.columns:
         styler = disp.style.apply(lambda col: [_style_date_cell(v) for v in col], subset=["value"])
+        styler = styler.format(_fmt_num, subset=["value"])
         return styler
     return disp.style
+
+# ------- New: Date Numbers — Digit Sums -------
+def build_date_digit_sums(date_vals: dict) -> pd.DataFrame:
+    rows = []
+    for k, v in date_vals.items():
+        try:
+            iv = int(v)
+        except Exception:
+            continue
+        ds = digit_sum_once(iv)
+        dr = 1 + ((iv - 1) % 9) if iv > 0 else 0
+        rows.append({"formula": k, "value": iv, "Digit Sum": ds, "Digital Root": dr})
+    if not rows:
+        return pd.DataFrame(columns=["formula", "value", "Digit Sum", "Digital Root"])
+    return pd.DataFrame(rows)
+
+def style_date_digit_sums(df: pd.DataFrame, highlights, color_for, focus_set, enable_bg=True):
+    disp = df.copy()
+    # Allowed values to color (any number that participates anywhere in highlights)
+    allowed = set()
+    for tb, obj in highlights.items():
+        allowed |= set(obj.get("any", set()))
+        for sysname, d in obj.get("by_system", {}).items():
+            for s in d.values():
+                allowed |= set(s)
+
+    def _style_cell(v):
+        try:
+            vv = int(v)
+        except Exception:
+            return ""
+        vvz = _zero_free_int(vv)
+        if vvz in allowed and enable_bg:
+            color = color_for.get(vvz, "#4b5563")
+            return f"background-color:{color};color:white;font-weight:600"
+        if vvz in focus_set and vvz != 0:
+            return "border:2px solid #ef4444"
+        return ""
+
+    def _fmt_num(v):
+        try:
+            if pd.isna(v):
+                return ""
+            return f"{int(v)}"
+        except Exception:
+            return v
+
+    styler = disp.style
+    for col in ["value", "Digit Sum", "Digital Root"]:
+        if col in disp.columns:
+            styler = styler.apply(lambda c: [_style_cell(v) for v in c], subset=[col])
+            styler = styler.format(_fmt_num, subset=[col])
+    return styler
+# ----------------------------------------------
 
 def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -678,6 +738,15 @@ with st.expander("Date Numbers", expanded=not collapse_all):
         st.table(style_date_df_with_highlights(date_df, hl, colors_map, focus_set, enable_bg=highlight_tables))
     else:
         st.dataframe(date_df, use_container_width=True)
+
+# New section: Digit sums of date numbers
+st.subheader("Date Numbers — Digit Sums")
+date_ds_df = build_date_digit_sums(date_vals)
+with st.expander("Date Numbers — Digit Sums", expanded=not collapse_all):
+    if highlight_tables or focus_set:
+        st.table(style_date_digit_sums(date_ds_df, hl, colors_map, focus_set, enable_bg=highlight_tables))
+    else:
+        st.dataframe(date_ds_df, use_container_width=True)
 
 st.subheader("Prime Hits")
 if primes_df is None or primes_df.empty:
