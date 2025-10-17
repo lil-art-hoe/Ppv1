@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import math
@@ -647,6 +648,7 @@ def _parse_focus_set(s: str):
                 vals.add(n)
     return set(_zero_free_int(v) for v in vals)
 focus_set = _parse_focus_set(focus_numbers_raw)
+show_droot = st.sidebar.checkbox("Show Digital Root", value=False)
 
 teams_df = None
 try:
@@ -742,6 +744,8 @@ with st.expander("Date Numbers", expanded=not collapse_all):
 # New section: Digit sums of date numbers
 st.subheader("Date Numbers — Digit Sums")
 date_ds_df = build_date_digit_sums(date_vals)
+if not show_droot and "Digital Root" in date_ds_df.columns:
+    date_ds_df = date_ds_df.drop(columns=["Digital Root"])  # hide when toggle is off
 with st.expander("Date Numbers — Digit Sums", expanded=not collapse_all):
     if highlight_tables or focus_set:
         st.table(style_date_digit_sums(date_ds_df, hl, colors_map, focus_set, enable_bg=highlight_tables))
