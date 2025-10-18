@@ -37,8 +37,23 @@ def _zero_free_int(n: int) -> int:
     s = ''.join(ch for ch in str(int(n)) if ch != '0')
     return int(s) if s else 0
 
+
+import unicodedata
+
 def _clean_text(s: str) -> str:
-    return "".join(ch for ch in str(s).upper() if "A" <= ch <= "Z")
+    """
+    Normalize to ASCII, uppercase, and keep only A-Z.
+    This fixes cases where visually similar Unicode letters or accented characters appear.
+    """
+    s = unicodedata.normalize("NFKD", str(s))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    try:
+        s = s.encode("ascii", "ignore").decode("ascii")
+    except Exception:
+        s = str(s)
+    s = s.upper()
+    s = re.sub(r"[^A-Z]", "", s)
+    return s
 
 def gematria_scores(s: str) -> Dict[str, int]:
     t = _clean_text(s)
@@ -919,6 +934,14 @@ if summary_df is None or summary_df.empty:
 else:
     with st.expander("Grouped by Number (Color)", expanded=not collapse_all):
         st.table(style_summary_with_colors(summary_df, focus_set))
+
+
+st.subheader("Quick Gematria Tester")
+with st.expander("Test any text", expanded=False):
+    test_txt = st.text_input("Type text to evaluate", value="n")
+    if test_txt.strip():
+        test_scores = gematria_scores(test_txt)
+        st.write({"text": test_txt, **test_scores})
 
 st.subheader("Matches")
 if matches_df.empty:
