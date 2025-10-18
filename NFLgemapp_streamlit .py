@@ -662,6 +662,35 @@ def style_matches_df_with_highlights(df: pd.DataFrame, color_for: dict, focus_se
             styler = styler.format(_fmt_num, subset=[col])
     return styler
 
+
+def style_primes_df_with_highlights(df: pd.DataFrame, color_for, focus_set):
+    # Return a Styler that colors prime/n/digit_sum cells by the per-integer palette and outlines focus numbers.
+    disp = df.copy()
+    def _style_num(v):
+        try:
+            vv = int(v)
+        except Exception:
+            return ""
+        vvz = _zero_free_int(vv)
+        bg = ""
+        if vvz in color_for:
+            bg = f"background-color:{color_for[vvz]};color:white;font-weight:600"
+        border = "border:2px solid #ef4444" if (vvz in focus_set and vvz != 0) else ""
+        join = ";" if (bg and border) else ""
+        return f"{bg}{join}{border}"
+    def _fmt_num(v):
+        try:
+            if pd.isna(v):
+                return ""
+            return f"{int(v)}"
+        except Exception:
+            return v
+    styler = disp.style
+    for col in ["prime", "n", "digit_sum"]:
+        if col in disp.columns:
+            styler = styler.apply(lambda c: [_style_num(v) for v in c], subset=[col])
+            styler = styler.format(_fmt_num, subset=[col])
+    return styler
 # --------------------
 # UI
 # --------------------
