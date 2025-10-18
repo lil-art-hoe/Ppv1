@@ -5,8 +5,9 @@ import math
 from datetime import date, datetime
 from typing import Dict, List, Set
 import re, colorsys
+from difflib import get_close_matches
 
-st.set_page_config(page_title="NFL Gematria (All CSV Columns)", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Gematria (All CSV Columns)", page_icon="🏈", layout="wide")
 
 # --------------------
 # Loading
@@ -411,7 +412,7 @@ def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for, focus
         return styler
     return disp.style
 
-# ------- New: Date Numbers — Digit Sums -------
+# ------- Date Numbers — Digit Sums -------
 def build_date_digit_sums(date_vals: dict) -> pd.DataFrame:
     rows = []
     for k, v in date_vals.items():
@@ -428,7 +429,6 @@ def build_date_digit_sums(date_vals: dict) -> pd.DataFrame:
 
 def style_date_digit_sums(df: pd.DataFrame, highlights, color_for, focus_set, enable_bg=True):
     disp = df.copy()
-    # Allowed values to color (any number that participates anywhere in highlights)
     allowed = set()
     for tb, obj in highlights.items():
         allowed |= set(obj.get("any", set()))
@@ -639,6 +639,8 @@ csv_path_info = st.sidebar.text_input("Or type a CSV path", value=default_path)
 highlight_tables = st.sidebar.checkbox("Highlight matches in tables", value=True)
 collapse_all = st.sidebar.checkbox("Collapse all sections", value=False)
 focus_numbers_raw = st.sidebar.text_input("Focus number(s) (comma-separated, optional)", value="")
+show_droot = st.sidebar.checkbox("Show Digital Root", value=False)
+
 def _parse_focus_set(s: str):
     vals = set()
     for part in re.split(r"[\s,]+", s.strip()):
@@ -648,7 +650,6 @@ def _parse_focus_set(s: str):
                 vals.add(n)
     return set(_zero_free_int(v) for v in vals)
 focus_set = _parse_focus_set(focus_numbers_raw)
-show_droot = st.sidebar.checkbox("Show Digital Root", value=False)
 
 teams_df = None
 try:
@@ -666,19 +667,83 @@ if teams_df is None:
     st.warning("Please upload a valid CSV or provide a correct path in the sidebar.")
     st.stop()
 
+# ---- Team selection: Dropdowns or Type-in with fuzzy matching ----
 colA, colB = st.columns(2)
-with colA:
-    home_team = st.selectbox("Home team", options=sorted(teams_df["team_full"].astype(str).unique()))
-with colB:
-    away_team = st.selectbox("Away team", options=sorted(teams_df["team_full"].astype(str).unique()))
+selection_mode = st.radio("Team selection", ["Dropdowns", "Type team names"], horizontal=True, index=0)
 
+def _norm_key(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "", str(s)).lower().strip()
+
+def _build_team_lookup(df: pd.DataFrame):
+    lookup = {}
+    for idx, row in df.iterrows():
+        candidates = set()
+        for col in ["team_full", "city", "state", "abbr", "nickname", "abbr_nickname"]:
+            if col in df.columns and pd.notna(row.get(col, None)) and str(row[col]).strip():
+                candidates.add(str(row[col]).strip())
+        if "aliases" in df.columns and pd.notna(row.get("aliases", None)):
+            for part in re.split(r"[;,]", str(row["aliases"])):
+                part = part.strip()
+                if part:
+                    candidates.add(part)
+        if "city" in df.columns and "nickname" in df.columns and pd.notna(row.get("city")) and pd.notna(row.get("nickname")):
+            candidates.add(f"{row['city']} {row['nickname']}")
+        if "team_full" in df.columns and pd.notna(row.get("team_full", None)):
+            candidates.add(str(row["team_full"]).strip())
+        for cand in candidates:
+            key = _norm_key(cand)
+            if key and key not in lookup:
+                lookup[key] = idx
+    return lookup
+
+def _resolve_team(text: str, df: pd.DataFrame, lookup):
+    if not text or not str(text).strip():
+        return None
+    key = _norm_key(text)
+    if key in lookup:
+        return lookup[key]
+    keys = list(lookup.keys())
+    if keys:
+        match = get_close_matches(key, keys, n=1, cutoff=0.6)
+        if match:
+            return lookup[match[0]]
+    if "team_full" in df.columns:
+        tkeys = [_norm_key(x) for x in df["team_full"].astype(str).tolist()]
+        match = get_close_matches(key, tkeys, n=1, cutoff=0.6)
+        if match:
+            idx = tkeys.index(match[0])
+            return df.index[idx]
+    return None
+
+if selection_mode == "Dropdowns":
+    with colA:
+        home_team = st.selectbox("Home team", options=sorted(teams_df["team_full"].astype(str).unique()))
+    with colB:
+        away_team = st.selectbox("Away team", options=sorted(teams_df["team_full"].astype(str).unique()))
+
+    home_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(home_team).lower()].iloc[0]
+    away_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(away_team).lower()].iloc[0]
+else:
+    lookup = _build_team_lookup(teams_df)
+    with colA:
+        home_text = st.text_input("Home team (type any known form)", value="", placeholder="e.g., Arizona Cardinals / ARI / Cardinals / Phoenix")
+    with colB:
+        away_text = st.text_input("Away team (type any known form)", value="", placeholder="e.g., Seattle Seahawks / SEA / Seahawks / Seattle")
+    h_idx = _resolve_team(home_text, teams_df, lookup)
+    a_idx = _resolve_team(away_text, teams_df, lookup)
+    if h_idx is None or a_idx is None:
+        st.warning("Type team names (any alias/abbr/city/nickname). I’ll match them as you type.")
+        st.stop()
+    home_row = teams_df.loc[h_idx]
+    away_row = teams_df.loc[a_idx]
+    st.caption(f"Resolved **Home** → **{home_row['team_full']}**")
+    st.caption(f"Resolved **Away** → **{away_row['team_full']}**")
+
+# ---- Rest of inputs ----
 game_date = st.date_input("Game date", value=date.today())
 home_qb = st.text_input("Home QB (optional)", value="", placeholder="e.g., Kyler Murray")
 away_qb = st.text_input("Away QB (optional)", value="", placeholder="e.g., Geno Smith")
-venue = st.text_input("Venue (City / Stadium)", value="", placeholder="e.g., SoFi Stadium, Inglewood, CA")
-
-home_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(home_team).lower()].iloc[0]
-away_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(away_team).lower()].iloc[0]
+venue = st.text_input("Venue (City / Stadium)", value="", placeholder="e.g., State Farm Stadium, Glendale, AZ")
 
 home_df = build_name_table_from_row(home_row)
 away_df = build_name_table_from_row(away_row)
@@ -741,11 +806,11 @@ with st.expander("Date Numbers", expanded=not collapse_all):
     else:
         st.dataframe(date_df, use_container_width=True)
 
-# New section: Digit sums of date numbers
 st.subheader("Date Numbers — Digit Sums")
 date_ds_df = build_date_digit_sums(date_vals)
-if not show_droot and "Digital Root" in date_ds_df.columns:
-    date_ds_df = date_ds_df.drop(columns=["Digital Root"])  # hide when toggle is off
+if not st.sidebar.checkbox("Show Digital Root", value=False):
+    if "Digital Root" in date_ds_df.columns:
+        date_ds_df = date_ds_df.drop(columns=["Digital Root"])
 with st.expander("Date Numbers — Digit Sums", expanded=not collapse_all):
     if highlight_tables or focus_set:
         st.table(style_date_digit_sums(date_ds_df, hl, colors_map, focus_set, enable_bg=highlight_tables))
@@ -774,4 +839,4 @@ else:
     with st.expander("Matches", expanded=not collapse_all):
         st.table(style_matches_df_with_highlights(_prettify_matches(matches_df), colors_map, focus_set))
 
-st.caption("Notes: All non-empty text cells are included. 'aliases' is split on ';' or ','. Duplicates are removed based on case/punctuation-insensitive comparison.")
+st.caption("Notes: You can choose **Dropdowns** or **Type team names**. Typing supports city, nickname, abbr (ARI/SEA), abbr_nickname, state, and anything in your 'aliases' column (comma/semicolon separated).")
