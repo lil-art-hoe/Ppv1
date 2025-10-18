@@ -7,7 +7,7 @@ from typing import Dict, List, Set
 import re, colorsys
 from difflib import get_close_matches
 
-st.set_page_config(page_title="Gematria (All CSV Columns + Any Team)", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="NFL Gematria (All CSV Columns + Any Team)", page_icon="🏈", layout="wide")
 
 # --------------------
 # Loading
@@ -497,23 +497,52 @@ def style_date_digit_sums(df: pd.DataFrame, highlights, color_for, focus_set, en
     return styler
 # ----------------------------------------------
 
+# --- safe int helper (robust for NaN/None/strings) ---
+def _safe_int(x):
+    try:
+        if x is None: 
+            return None
+        if isinstance(x, str) and not x.strip():
+            return None
+        # handle pandas NA
+        try:
+            import math as _math
+            if isinstance(x, float) and (_math.isnan(x) or _math.isinf(x)):
+                return None
+        except Exception:
+            pass
+        return int(float(x))
+    except Exception:
+        return None
+
 def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     if matches_df is None or matches_df.empty:
         return pd.DataFrame(columns=["prime", "n", "digit_sum", "from"])
     for _, r in matches_df.iterrows():
-        typ = r.get("type")
-        ctx = r.get("context", {}) if isinstance(r.get("context", {}), dict) else {}
-        pval = ctx.get("prime", None)
-        n = ctx.get("n", None)
-        if pval is None:
+        try:
+            ctx = r.get("context", {}) if isinstance(r.get("context", {}), dict) else {}
+            pval = ctx.get("prime", None)
+            n = ctx.get("n", None)
+            p_int = _safe_int(pval)
+            n_int = _safe_int(n)
+            if p_int is None:
+                continue
+            ds = digit_sum_once(int(p_int))
+            rows.append({
+                "prime": int(p_int),
+                "n": int(n_int) if n_int is not None else None,
+                "digit_sum": int(ds),
+                "from": str(r.get("type"))
+            })
+        except Exception:
+            # skip malformed rows defensively
             continue
-        ds = digit_sum_once(int(pval))
-        rows.append({"prime": int(pval), "n": int(n) if n is not None else None, "digit_sum": int(ds), "from": str(typ)})
     if not rows:
         return pd.DataFrame(columns=["prime", "n", "digit_sum", "from"])
     dfp = pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
     return dfp
+
 
 def _tables_for_number(vz, highlights):
     present = []
@@ -845,11 +874,14 @@ with st.expander("Date Numbers — Digit Sums", expanded=not collapse_all):
         st.dataframe(date_ds_df, use_container_width=True)
 
 st.subheader("Prime Hits")
-if primes_df is None or primes_df.empty:
-    st.caption("No prime-related matches.")
-else:
-    with st.expander("Prime Hits", expanded=not collapse_all):
-        st.table(style_primes_df_with_highlights(primes_df, colors_map, focus_set))
+try:
+    if primes_df is None or primes_df.empty:
+        st.caption("No prime-related matches.")
+    else:
+        with st.expander("Prime Hits", expanded=not collapse_all):
+            st.table(style_primes_df_with_highlights(primes_df, colors_map, focus_set))
+except Exception as e:
+    st.error(f"Prime Hits rendering error: {e}")
 
 st.subheader("Grouped by Number (Color)")
 summary_df = build_match_summary(matches_df, hl, colors_map)
