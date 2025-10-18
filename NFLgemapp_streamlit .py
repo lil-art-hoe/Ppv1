@@ -7,7 +7,7 @@ from typing import Dict, List, Set
 import re, colorsys
 from difflib import get_close_matches
 
-st.set_page_config(page_title="Gematria (All CSV Columns)", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="NFL Gematria (All CSV Columns)", page_icon="🏈", layout="wide")
 
 # --------------------
 # Loading
@@ -667,6 +667,7 @@ if teams_df is None:
     st.warning("Please upload a valid CSV or provide a correct path in the sidebar.")
     st.stop()
 
+
 # ---- Team selection: Dropdowns or Type-in with fuzzy matching ----
 colA, colB = st.columns(2)
 selection_mode = st.radio("Team selection", ["Dropdowns", "Type team names"], horizontal=True, index=0)
@@ -704,10 +705,12 @@ def _resolve_team(text: str, df: pd.DataFrame, lookup):
         return lookup[key]
     keys = list(lookup.keys())
     if keys:
+        from difflib import get_close_matches
         match = get_close_matches(key, keys, n=1, cutoff=0.6)
         if match:
             return lookup[match[0]]
     if "team_full" in df.columns:
+        from difflib import get_close_matches
         tkeys = [_norm_key(x) for x in df["team_full"].astype(str).tolist()]
         match = get_close_matches(key, tkeys, n=1, cutoff=0.6)
         if match:
@@ -715,12 +718,14 @@ def _resolve_team(text: str, df: pd.DataFrame, lookup):
             return df.index[idx]
     return None
 
+home_row = None
+away_row = None
+
 if selection_mode == "Dropdowns":
     with colA:
         home_team = st.selectbox("Home team", options=sorted(teams_df["team_full"].astype(str).unique()))
     with colB:
         away_team = st.selectbox("Away team", options=sorted(teams_df["team_full"].astype(str).unique()))
-
     home_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(home_team).lower()].iloc[0]
     away_row = teams_df[teams_df["team_full"].astype(str).str.lower() == str(away_team).lower()].iloc[0]
 else:
@@ -731,22 +736,30 @@ else:
         away_text = st.text_input("Away team (type any known form)", value="", placeholder="e.g., Seattle Seahawks / SEA / Seahawks / Seattle")
     h_idx = _resolve_team(home_text, teams_df, lookup)
     a_idx = _resolve_team(away_text, teams_df, lookup)
-    if h_idx is None or a_idx is None:
-        st.warning("Type team names (any alias/abbr/city/nickname). I’ll match them as you type.")
-        st.stop()
-    home_row = teams_df.loc[h_idx]
-    away_row = teams_df.loc[a_idx]
-    st.caption(f"Resolved **Home** → **{home_row['team_full']}**")
-    st.caption(f"Resolved **Away** → **{away_row['team_full']}**")
+    if h_idx is not None:
+        home_row = teams_df.loc[h_idx]
+        st.caption(f"Resolved **Home** → **{home_row['team_full']}**")
+    else:
+        st.info("Type a home team (any alias/abbr/city/nickname).")
+    if a_idx is not None:
+        away_row = teams_df.loc[a_idx]
+        st.caption(f"Resolved **Away** → **{away_row['team_full']}**")
+    else:
+        st.info("Type an away team (any alias/abbr/city/nickname).")
 
+# Helper to safely build gematria table
+def _safe_build_table(row):
+    if row is None:
+        return pd.DataFrame(columns=["name","ordinal","reduction","reverse_ordinal","reverse_reduction"])
+    return build_name_table_from_row(row)
 # ---- Rest of inputs ----
 game_date = st.date_input("Game date", value=date.today())
 home_qb = st.text_input("Home QB (optional)", value="", placeholder="e.g., Kyler Murray")
 away_qb = st.text_input("Away QB (optional)", value="", placeholder="e.g., Geno Smith")
 venue = st.text_input("Venue (City / Stadium)", value="", placeholder="e.g., State Farm Stadium, Glendale, AZ")
 
-home_df = build_name_table_from_row(home_row)
-away_df = build_name_table_from_row(away_row)
+home_df = _safe_build_table(home_row)
+away_df = _safe_build_table(away_row)
 
 def _append_qb(df, qb_name: str):
     qb = qb_name.strip()
@@ -808,7 +821,7 @@ with st.expander("Date Numbers", expanded=not collapse_all):
 
 st.subheader("Date Numbers — Digit Sums")
 date_ds_df = build_date_digit_sums(date_vals)
-if not st.sidebar.checkbox("Show Digital Root", value=False):
+if not show_droot:
     if "Digital Root" in date_ds_df.columns:
         date_ds_df = date_ds_df.drop(columns=["Digital Root"])
 with st.expander("Date Numbers — Digit Sums", expanded=not collapse_all):
