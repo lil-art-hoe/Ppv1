@@ -4,10 +4,10 @@ import pandas as pd
 import math
 from datetime import date, datetime
 from typing import Dict, List, Set
-import re, colorsys
+import re, colorsys, unicodedata
 from difflib import get_close_matches
 
-st.set_page_config(page_title="NFL Gematria (All CSV Columns + Any Team)", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Gematria (CSV or Any Team) + Badges", page_icon="🏈", layout="wide")
 
 # --------------------
 # Loading
@@ -37,13 +37,10 @@ def _zero_free_int(n: int) -> int:
     s = ''.join(ch for ch in str(int(n)) if ch != '0')
     return int(s) if s else 0
 
-
-import unicodedata
-
 def _clean_text(s: str) -> str:
     """
     Normalize to ASCII, uppercase, and keep only A-Z.
-    This fixes cases where visually similar Unicode letters or accented characters appear.
+    Handles Unicode look-alikes (e.g., accented letters, math italic).
     """
     s = unicodedata.normalize("NFKD", str(s))
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
@@ -192,14 +189,20 @@ def build_custom_team_df(team_name: str, aliases_text: str = "") -> pd.DataFrame
 def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[str, int], venue_df: pd.DataFrame | None = None) -> pd.DataFrame:
     def values_from(df: pd.DataFrame) -> Dict[str, Set[int]]:
         v = {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
+        if df is None:
+            return v
         for _, r in df.iterrows():
             for k in v.keys():
-                v[k].add(int(r[k]))
+                if k in r:
+                    try:
+                        v[k].add(int(r[k]))
+                    except Exception:
+                        pass
         return v
 
-    home_vals = values_from(home_df) if home_df is not None else {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
-    away_vals = values_from(away_df) if away_df is not None else {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
-    venue_vals = values_from(venue_df) if venue_df is not None else {"ordinal": set(), "reduction": set(), "reverse_ordinal": set(), "reverse_reduction": set()}
+    home_vals = values_from(home_df)
+    away_vals = values_from(away_df)
+    venue_vals = values_from(venue_df)
 
     date_values = list(date_nums.values())
     date_set_raw: Set[int] = set(int(x) for x in date_values)
@@ -208,7 +211,10 @@ def find_matches(home_df: pd.DataFrame, away_df: pd.DataFrame, date_nums: Dict[s
     matches = []
 
     def record(match_type, detail, value, context):
-        matches.append({"type": match_type, "detail": detail, "value": int(value), "context": context})
+        try:
+            matches.append({"type": match_type, "detail": detail, "value": int(value), "context": context})
+        except Exception:
+            pass
 
     # Direct home-away matches by system
     for sys in home_vals.keys():
@@ -384,6 +390,35 @@ def _compute_highlights(matches_df: pd.DataFrame):
                 add_any(["date"], n)
     return highlights
 
+def compute_badge_sets(matches_df: pd.DataFrame):
+    # Return (date_set, prime_set) of team/venue values that match date or prime logic.
+    date_set, prime_set = set(), set()
+    if matches_df is None or matches_df.empty:
+        return date_set, prime_set
+
+    for _, r in matches_df.iterrows():
+        try:
+            typ = r.get("type")
+            v = r.get("value")
+            ctx = r.get("context", {}) if isinstance(r.get("context", {}), dict) else {}
+            n = ctx.get("n", None)
+
+            # Team/Venue value equals a Date number
+            if typ == "value-date direct" and v is not None:
+                date_set.add(_zero_free_int(int(v)))
+
+            # Prime-driven matches:
+            # - team value used as prime index n
+            if typ in ("prime-index", "prime-digit-sum") and n is not None:
+                prime_set.add(_zero_free_int(int(n)))
+
+            # - or date->prime equals a team value
+            if typ in ("date->prime-index->value", "date->prime-digit-sum->value") and v is not None:
+                prime_set.add(_zero_free_int(int(v)))
+        except Exception:
+            continue
+    return date_set, prime_set
+
 def _collect_values(highlights):
     vals = set()
     for tb, obj in highlights.items():
@@ -415,13 +450,52 @@ def _style_for_value(v, sys_name, table_label, highlights, color_for, focus_set,
         return "border:2px solid #ef4444"
     return ""
 
-def style_df_with_highlights(df: pd.DataFrame, table_label: str, highlights, color_for, focus_set, enable_bg=True):
+def style_df_with_highlights(
+    df: pd.DataFrame,
+    table_label: str,
+    highlights,
+    color_for,
+    focus_set,
+    enable_bg=True,
+    badges: dict | None = None,
+):
     disp = df.drop(columns=["source"], errors="ignore").copy()
     systems = ["ordinal", "reduction", "reverse_ordinal", "reverse_reduction"]
     styler = disp.style
+
+    # apply color/background/highlight first
     for sys_name in systems:
         if sys_name in disp.columns:
-            styler = styler.apply(lambda col: [ _style_for_value(v, sys_name, table_label, highlights, color_for, focus_set, enable_bg) for v in col ], subset=[sys_name])
+            styler = styler.apply(
+                lambda col: [
+                    _style_for_value(v, sys_name, table_label, highlights, color_for, focus_set, enable_bg)
+                    for v in col
+                ],
+                subset=[sys_name],
+            )
+
+    # append badges to display values
+    if badges:
+        date_set = badges.get("date", set())
+        prime_set = badges.get("prime", set())
+
+        def _fmt_with_badges(v):
+            try:
+                iv = int(v)
+            except Exception:
+                return v
+            vz = _zero_free_int(iv)
+            marks = ""
+            if vz in date_set:
+                marks += " 📅"
+            if vz in prime_set:
+                marks += " 🔺"
+            return f"{iv}{marks}"
+
+        for sys_name in systems:
+            if sys_name in disp.columns:
+                styler = styler.format(_fmt_with_badges, subset=[sys_name])
+
     return styler
 
 def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for, focus_set, enable_bg=True):
@@ -510,22 +584,17 @@ def style_date_digit_sums(df: pd.DataFrame, highlights, color_for, focus_set, en
             styler = styler.apply(lambda c: [_style_cell(v) for v in c], subset=[col])
             styler = styler.format(_fmt_num, subset=[col])
     return styler
-# ----------------------------------------------
 
-# --- safe int helper (robust for NaN/None/strings) ---
+# ---- Prime hits (robust) ----
 def _safe_int(x):
     try:
-        if x is None: 
+        if x is None:
             return None
         if isinstance(x, str) and not x.strip():
             return None
-        # handle pandas NA
-        try:
-            import math as _math
-            if isinstance(x, float) and (_math.isnan(x) or _math.isinf(x)):
-                return None
-        except Exception:
-            pass
+        import math as _math
+        if isinstance(x, float) and (_math.isnan(x) or _math.isinf(x)):
+            return None
         return int(float(x))
     except Exception:
         return None
@@ -551,13 +620,39 @@ def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
                 "from": str(r.get("type"))
             })
         except Exception:
-            # skip malformed rows defensively
             continue
     if not rows:
         return pd.DataFrame(columns=["prime", "n", "digit_sum", "from"])
     dfp = pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
     return dfp
 
+def style_primes_df_with_highlights(df: pd.DataFrame, color_for, focus_set):
+    disp = df.copy()
+    def _style_num(v):
+        try:
+            vv = int(v)
+        except Exception:
+            return ""
+        vvz = _zero_free_int(vv)
+        bg = ""
+        if vvz in color_for:
+            bg = f"background-color:{color_for[vvz]};color:white;font-weight:600"
+        border = "border:2px solid #ef4444" if (vvz in focus_set and vvz != 0) else ""
+        join = ";" if (bg and border) else ""
+        return f"{bg}{join}{border}"
+    def _fmt_num(v):
+        try:
+            if pd.isna(v):
+                return ""
+            return f"{int(v)}"
+        except Exception:
+            return v
+    styler = disp.style
+    for col in ["prime", "n", "digit_sum"]:
+        if col in disp.columns:
+            styler = styler.apply(lambda c: [_style_num(v) for v in c], subset=[col])
+            styler = styler.format(_fmt_num, subset=[col])
+    return styler
 
 def _tables_for_number(vz, highlights):
     present = []
@@ -677,35 +772,6 @@ def style_matches_df_with_highlights(df: pd.DataFrame, color_for: dict, focus_se
             styler = styler.format(_fmt_num, subset=[col])
     return styler
 
-
-def style_primes_df_with_highlights(df: pd.DataFrame, color_for, focus_set):
-    # Return a Styler that colors prime/n/digit_sum cells by the per-integer palette and outlines focus numbers.
-    disp = df.copy()
-    def _style_num(v):
-        try:
-            vv = int(v)
-        except Exception:
-            return ""
-        vvz = _zero_free_int(vv)
-        bg = ""
-        if vvz in color_for:
-            bg = f"background-color:{color_for[vvz]};color:white;font-weight:600"
-        border = "border:2px solid #ef4444" if (vvz in focus_set and vvz != 0) else ""
-        join = ";" if (bg and border) else ""
-        return f"{bg}{join}{border}"
-    def _fmt_num(v):
-        try:
-            if pd.isna(v):
-                return ""
-            return f"{int(v)}"
-        except Exception:
-            return v
-    styler = disp.style
-    for col in ["prime", "n", "digit_sum"]:
-        if col in disp.columns:
-            styler = styler.apply(lambda c: [_style_num(v) for v in c], subset=[col])
-            styler = styler.format(_fmt_num, subset=[col])
-    return styler
 # --------------------
 # UI
 # --------------------
@@ -720,7 +786,9 @@ show_droot = st.sidebar.checkbox("Show Digital Root", value=False)
 
 def _parse_focus_set(s: str):
     vals = set()
-    for part in re.split(r"[\s,]+", s.strip()):
+    if not s:
+        return vals
+    for part in re.split(r"[\\s,]+", s.strip()):
         if part.isdigit():
             n = int(part)
             if n > 0:
@@ -738,7 +806,7 @@ except Exception as e:
     st.sidebar.error(f"CSV load error: {e}")
 
 st.title("🏈 Gematria — NFL CSV or ANY Team")
-st.caption("Keep the original NFL CSV workflow, **or** switch to **Custom typed teams** (e.g., college teams). Everything else—QB inputs, venue, date numbers, primes, highlights—still works.")
+st.caption("Keep the original NFL CSV workflow, or switch to Custom typed teams (e.g., college teams). Badges show inline matches: 📅 for Date, 🔺 for Prime.")
 
 if teams_df is None:
     st.warning("Please upload a valid CSV or provide a correct path in the sidebar.")
@@ -812,8 +880,10 @@ if source == "NFL CSV":
             home_text = st.text_input("Home team (NFL—type any known form)", value="", placeholder="e.g., Arizona Cardinals / ARI / Cardinals / Phoenix")
         with colB:
             away_text = st.text_input("Away team (NFL—type any known form)", value="", placeholder="e.g., Seattle Seahawks / SEA / Seahawks / Seattle")
-        home_row = teams_df.loc[_resolve_team(home_text, teams_df, lookup)] if _resolve_team(home_text, teams_df, lookup) is not None else None
-        away_row = teams_df.loc[_resolve_team(away_text, teams_df, lookup)] if _resolve_team(away_text, teams_df, lookup) is not None else None
+        h_idx = _resolve_team(home_text, teams_df, lookup)
+        a_idx = _resolve_team(away_text, teams_df, lookup)
+        home_row = teams_df.loc[h_idx] if h_idx is not None else None
+        away_row = teams_df.loc[a_idx] if a_idx is not None else None
         if home_row is None: st.info("Type a valid NFL home team (alias/abbr/city/nickname).")
         else: st.caption(f"Resolved **Home** → **{home_row['team_full']}**")
         if away_row is None: st.info("Type a valid NFL away team (alias/abbr/city/nickname).")
@@ -868,34 +938,37 @@ if venue.strip():
 date_vals = date_numbers(game_date)
 matches_df = find_matches(home_df, away_df, date_vals, venue_df=venue_df)
 
-# remove direct team-vs-team matches (as previously requested)
+# remove direct team-vs-team matches (as you requested earlier)
 if isinstance(matches_df, pd.DataFrame) and 'type' in matches_df.columns:
     matches_df = matches_df[matches_df['type'] != 'home-away direct'].reset_index(drop=True)
 
 hl = _compute_highlights(matches_df)
 colors_map = _build_value_colors(hl)
 primes_df = build_prime_hits(matches_df)
+date_badges, prime_badges = compute_badge_sets(matches_df)
+badges = {'date': date_badges, 'prime': prime_badges}
 
 # ------------- Rendering -------------
 st.subheader("Team Values")
+st.caption("Legend: 📅 = matches a Date Number,  🔺 = involved in a Prime-based match")
 c1, c2 = st.columns(2)
 with c1:
     with st.expander("Home team", expanded=not collapse_all):
         if highlight_tables or focus_set:
-            st.table(style_df_with_highlights(home_df, "home", hl, colors_map, focus_set, enable_bg=highlight_tables))
+            st.table(style_df_with_highlights(home_df, "home", hl, colors_map, focus_set, enable_bg=highlight_tables, badges=badges))
         else:
             st.dataframe(home_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 with c2:
     with st.expander("Away team", expanded=not collapse_all):
         if highlight_tables or focus_set:
-            st.table(style_df_with_highlights(away_df, "away", hl, colors_map, focus_set, enable_bg=highlight_tables))
+            st.table(style_df_with_highlights(away_df, "away", hl, colors_map, focus_set, enable_bg=highlight_tables, badges=badges))
         else:
             st.dataframe(away_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
 if venue_df is not None:
     with st.expander("Venue gematria", expanded=not collapse_all):
         if highlight_tables or focus_set:
-            st.table(style_df_with_highlights(venue_df, "venue", hl, colors_map, focus_set, enable_bg=highlight_tables))
+            st.table(style_df_with_highlights(venue_df, "venue", hl, colors_map, focus_set, enable_bg=highlight_tables, badges=badges))
         else:
             st.dataframe(venue_df.drop(columns=["source"], errors="ignore"), use_container_width=True)
 
@@ -935,14 +1008,6 @@ else:
     with st.expander("Grouped by Number (Color)", expanded=not collapse_all):
         st.table(style_summary_with_colors(summary_df, focus_set))
 
-
-st.subheader("Quick Gematria Tester")
-with st.expander("Test any text", expanded=False):
-    test_txt = st.text_input("Type text to evaluate", value="n")
-    if test_txt.strip():
-        test_scores = gematria_scores(test_txt)
-        st.write({"text": test_txt, **test_scores})
-
 st.subheader("Matches")
 if matches_df.empty:
     st.info("No matches found with the current inputs.")
@@ -950,4 +1015,10 @@ else:
     with st.expander("Matches", expanded=not collapse_all):
         st.table(style_matches_df_with_highlights(_prettify_matches(matches_df), colors_map, focus_set))
 
-st.caption("Notes: **NFL CSV** uses all text columns (city/state/abbr/nickname/alias/etc.). **Custom typed** lets you bring any team names (college/HS/etc.), plus optional aliases to expand the table.")
+# Quick tester
+st.subheader("Quick Gematria Tester")
+with st.expander("Test any text", expanded=False):
+    test_txt = st.text_input("Type text to evaluate", value="n")
+    if test_txt.strip():
+        test_scores = gematria_scores(test_txt)
+        st.write({"text": test_txt, **test_scores})
