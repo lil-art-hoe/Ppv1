@@ -599,6 +599,19 @@ def _safe_int(x):
     except Exception:
         return None
 
+
+def _date_sets(date_vals: dict):
+    raw = set()
+    zf = set()
+    for v in date_vals.values():
+        try:
+            iv = int(v)
+        except Exception:
+            continue
+        raw.add(iv)
+        zf.add(_zero_free_int(iv))
+    return raw, zf
+
 def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     if matches_df is None or matches_df.empty:
@@ -625,6 +638,70 @@ def build_prime_hits(matches_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["prime", "n", "digit_sum", "from"])
     dfp = pd.DataFrame(rows).drop_duplicates().reset_index(drop=True)
     return dfp
+
+
+def filter_primes_by_date_coord(primes_df: pd.DataFrame, matches_df: pd.DataFrame, date_vals: dict) -> pd.DataFrame:
+    if primes_df is None or primes_df.empty:
+        return primes_df
+    raw, zf = _date_sets(date_vals)
+
+    keep = []
+    for i, row in primes_df.iterrows():
+        typ = row.get("from")
+        p = row.get("prime")
+        n = row.get("n")
+        ds = row.get("digit_sum")
+        try:
+            n_int = int(n) if pd.notna(n) else None
+            p_int = int(p) if pd.notna(p) else None
+            ds_int = int(ds) if pd.notna(ds) else None
+        except Exception:
+            n_int = p_int = ds_int = None
+
+        # For prime-index / prime-digit-sum: require the TEAM value n also matches date
+        if typ in ("prime-index", "prime-digit-sum"):
+            if n_int is not None:
+                if (n_int in raw) or (_zero_free_int(n_int) in zf):
+                    keep.append(i)
+                    continue
+            # else drop
+            continue
+
+        # For date->prime-* types: require the TEAM/VENUE matched value (matches_df.value) also matches date
+        if typ in ("date->prime-index->value", "date->prime-digit-sum->value"):
+            # find corresponding match rows
+            def _ctx_ok(ctx):
+                return isinstance(ctx, dict) and ctx.get("prime") == p_int and ctx.get("n") == _zero_free_int(int(ctx.get("n"))) if ctx.get("n") is not None else True
+            ok = False
+            for _, mr in matches_df.iterrows():
+                if mr.get("type") != typ:
+                    continue
+                ctx = mr.get("context", {})
+                if not isinstance(ctx, dict):
+                    continue
+                # compare prime and n when available
+                ctx_p = ctx.get("prime", None)
+                ctx_n = ctx.get("n", None)
+                if (p_int is not None and ctx_p != p_int):
+                    continue
+                if (n_int is not None and ctx_n != n_int):
+                    continue
+                tv = mr.get("value", None)  # this is the team/venue value in these types
+                try:
+                    tv_int = int(tv)
+                except Exception:
+                    tv_int = None
+                if tv_int is not None and ((tv_int in raw) or (_zero_free_int(tv_int) in zf)):
+                    ok = True
+                    break
+            if ok:
+                keep.append(i)
+            continue
+
+        # Other types (shouldn't appear here), drop by default
+    if not keep:
+        return pd.DataFrame(columns=primes_df.columns)
+    return primes_df.iloc[keep].reset_index(drop=True)
 
 def style_primes_df_with_highlights(df: pd.DataFrame, color_for, focus_set):
     disp = df.copy()
@@ -783,6 +860,7 @@ highlight_tables = st.sidebar.checkbox("Highlight matches in tables", value=True
 collapse_all = st.sidebar.checkbox("Collapse all sections", value=False)
 focus_numbers_raw = st.sidebar.text_input("Focus number(s) (comma-separated, optional)", value="")
 show_droot = st.sidebar.checkbox("Show Digital Root", value=False)
+prime_filter_coordinated = st.sidebar.checkbox("Only show prime hits coordinated with date-matching team values", value=False)
 
 def _parse_focus_set(s: str):
     vals = set()
@@ -992,11 +1070,14 @@ with st.expander("Date Numbers — Digit Sums", expanded=not collapse_all):
 
 st.subheader("Prime Hits")
 try:
-    if primes_df is None or primes_df.empty:
-        st.caption("No prime-related matches.")
+    _pr_df = primes_df
+    if prime_filter_coordinated:
+        _pr_df = filter_primes_by_date_coord(primes_df, matches_df, date_vals)
+    if _pr_df is None or _pr_df.empty:
+        st.caption("No prime-related matches." if not prime_filter_coordinated else "No coordinated prime hits (team value also matches a Date number).")
     else:
         with st.expander("Prime Hits", expanded=not collapse_all):
-            st.table(style_primes_df_with_highlights(primes_df, colors_map, focus_set))
+            st.table(style_primes_df_with_highlights(_pr_df, colors_map, focus_set))
 except Exception as e:
     st.error(f"Prime Hits rendering error: {e}")
 
