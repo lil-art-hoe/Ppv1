@@ -392,6 +392,49 @@ def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for, focus
     styler = styler.format(_fmt_num, subset=["value"])
     return styler
 
+def style_date_multi_df_with_highlights(df: pd.DataFrame, numeric_cols, highlights, color_for, focus_set, enable_bg=True):
+    disp = df.copy()
+    # Ensure columns exist
+    numeric_cols = [c for c in numeric_cols if c in disp.columns]
+    if not numeric_cols:
+        return disp.style
+
+    date_any = set(highlights.get("date", {}).get("any", set()))
+    date_sys_union = set()
+    for _, d in highlights.get("date", {}).get("by_system", {}).items():
+        for s in d.values():
+            date_sys_union |= set(s)
+    allowed = date_any | date_sys_union
+
+    def _style_cell(v):
+        try:
+            vv = int(v)
+        except Exception:
+            return ""
+        vvz = int(str(vv).replace("0", "")) if vv != 0 else 0
+        if vvz in allowed:
+            if enable_bg:
+                color = color_for.get(vvz, "#4b5563")
+                return f"background-color:{color};color:white;font-weight:600"
+        if vvz in focus_set and vvz != 0:
+            return "border:2px solid #ef4444"
+        return ""
+
+    def _fmt_num(v):
+        try:
+            if pd.isna(v):
+                return ""
+            return f"{int(v)}"
+        except Exception:
+            return v
+
+    styler = disp.style
+    for col in numeric_cols:
+        styler = styler.apply(lambda c: [_style_cell(v) for v in c], subset=[col])
+        styler = styler.format(_fmt_num, subset=[col])
+    return styler
+
+
 
 def _safe_int(x):
     try:
@@ -668,43 +711,37 @@ if venue_df is not None and not venue_df.empty:
         else:
             st.dataframe(venue_df.drop(columns=["source","hebrew_raw"], errors="ignore"), use_container_width=True)
 
+
 st.subheader("Date Numbers")
-date_df = pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_vals.values())})
 with st.expander("Date Numbers", expanded=not collapse_all):
-    st.table(style_date_df_with_highlights(date_df, hl, colors_map, focus_set, enable_bg=highlight_tables))
-
-
-st.subheader("Date Numbers — Digit Sums")
-with st.expander("Date Numbers — Digit Sums", expanded=not collapse_all):
-    # Build Digit Sum table directly from date values
-    ds_rows = []
+    # Build unified table: base, digit_sum, digital_root (optional)
+    rows = []
     for k, v in date_vals.items():
         try:
             iv = int(v)
-            ds_rows.append({"formula": k, "value": digit_sum_once(iv)})
         except Exception:
-            pass
-    ds_view = pd.DataFrame(ds_rows, columns=["formula","value"])
-    if ds_view.empty:
-        st.caption("No date values computed.")
-    else:
-        st.markdown("**Digit Sum**")
-        st.table(style_date_df_with_highlights(ds_view, hl, colors_map, focus_set, enable_bg=highlight_tables))
+            continue
+        ds = digit_sum_once(iv)
+        dr = 1 + ((iv - 1) % 9) if iv > 0 else 0
+        rows.append({"formula": k, "base": iv, "digit_sum": ds, "digital_root": dr})
+    uni_df = pd.DataFrame(rows, columns=["formula","base","digit_sum","digital_root"])
+    if not show_droot and "digital_root" in uni_df.columns:
+        uni_df = uni_df.drop(columns=["digital_root"])
 
-    # Optional Digital Root table
-    if show_droot:
-        dr_rows = []
-        for k, v in date_vals.items():
-            try:
-                iv = int(v)
-                dr = 1 + ((iv - 1) % 9) if iv > 0 else 0
-                dr_rows.append({"formula": k, "value": dr})
-            except Exception:
-                pass
-        dr_view = pd.DataFrame(dr_rows, columns=["formula","value"])
-        if not dr_view.empty:
-            st.markdown("**Digital Root**")
-            st.table(style_date_df_with_highlights(dr_view, hl, colors_map, focus_set, enable_bg=highlight_tables))
+    # Rename numeric columns for display without losing access for styling
+    display_df = uni_df.rename(columns={
+        "base": "value",
+        "digit_sum": "digit_sum",
+        "digital_root": "digital_root"
+    })
+    # Order columns for readability
+    cols = ["formula", "value", "digit_sum"] + (["digital_root"] if show_droot else [])
+    display_df = display_df[cols]
+
+    # Style all numeric columns with the same palette/highlight logic
+    num_cols = [c for c in display_df.columns if c != "formula"]
+    st.table(style_date_multi_df_with_highlights(display_df, num_cols, hl, colors_map, focus_set, enable_bg=highlight_tables))
+
 st.subheader("Prime Hits")
 try:
     _pr_df = primes_df
