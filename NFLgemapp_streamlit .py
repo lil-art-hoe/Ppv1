@@ -682,23 +682,22 @@ for k, v in date_vals.items():
         dr = 1 + ((iv - 1) % 9) if iv > 0 else 0
         rows_ds.append({"formula": k, "value": iv, "Digit Sum": ds, "Digital Root": dr})
     except Exception: pass
-date_ds_df = pd.DataFrame(rows_ds)
+date_ds_df = pd.DataFrame(rows_ds, columns=['formula','base','digit_sum','digital_root'])
 if not show_droot and "Digital Root" in date_ds_df.columns:
     date_ds_df = date_ds_df.drop(columns=["Digital Root"])
+
 with st.expander("Date Numbers — Digit Sums", expanded=not collapse_all):
-        # Show Digit Sum (styled)
-    if not date_ds_df.empty:
-        ds_view = date_ds_df[["formula", "digit_sum"]].rename(columns={"digit_sum": "value"})
+    if not date_ds_df.empty and set(['formula','digit_sum']).issubset(date_ds_df.columns):
+        ds_view = date_ds_df[['formula','digit_sum']].rename(columns={'digit_sum':'value'})
         st.markdown("**Digit Sum**")
         st.table(style_date_df_with_highlights(ds_view, hl, colors_map, focus_set, enable_bg=highlight_tables))
     else:
         st.caption("No date values computed.")
-
-    # Optional Digital Root (styled)
-    if show_droot and "digital_root" in date_ds_df.columns:
-        dr_view = date_ds_df[["formula", "digital_root"]].rename(columns={"digital_root": "value"})
+    if show_droot and (not date_ds_df.empty) and set(['formula','digital_root']).issubset(date_ds_df.columns):
+        dr_view = date_ds_df[['formula','digital_root']].rename(columns={'digital_root':'value'})
         st.markdown("**Digital Root**")
         st.table(style_date_df_with_highlights(dr_view, hl, colors_map, focus_set, enable_bg=highlight_tables))
+    
 
 st.subheader("Prime Hits")
 try:
