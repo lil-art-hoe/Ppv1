@@ -352,33 +352,46 @@ def style_df_with_highlights(df: pd.DataFrame, table_label: str, highlights, col
             styler = styler.format(_fmt_with_badges, subset=[sys_name])
     return styler
 
+
 def style_date_df_with_highlights(df: pd.DataFrame, highlights, color_for, focus_set, enable_bg=True):
     disp = df.copy()
+    # If no 'value' column present, just return a basic styler to avoid KeyError.
+    if "value" not in disp.columns:
+        return disp.style
+
     date_any = set(highlights.get("date", {}).get("any", set()))
     date_sys_union = set()
     for _, d in highlights.get("date", {}).get("by_system", {}).items():
-        for s in d.values(): date_sys_union |= set(s)
+        for s in d.values():
+            date_sys_union |= set(s)
     allowed = date_any | date_sys_union
+
     def _style_date_cell(v):
-        try: vv = int(v)
-        except Exception: return ""
-        vvz = _zero_free_int(vv)
+        try:
+            vv = int(v)
+        except Exception:
+            return ""
+        vvz = int(str(vv).replace("0", "")) if vv != 0 else 0
         if vvz in allowed:
             if enable_bg:
                 color = color_for.get(vvz, "#4b5563")
                 return f"background-color:{color};color:white;font-weight:600"
-        if vvz in focus_set and vvz != 0: return "border:2px solid #ef4444"
+        if vvz in focus_set and vvz != 0:
+            return "border:2px solid #ef4444"
         return ""
+
     def _fmt_num(v):
-        try: 
-            if pd.isna(v): return ""
+        try:
+            if pd.isna(v):
+                return ""
             return f"{int(v)}"
-        except Exception: return v
-    if "value" in disp.columns:
-        styler = disp.style.apply(lambda col: [_style_date_cell(v) for v in col], subset=["value"])
-        styler = styler.format(_fmt_num, subset=["value"])
-        return styler
-    return disp.style
+        except Exception:
+            return v
+
+    styler = disp.style.apply(lambda col: [_style_date_cell(v) for v in col], subset=["value"])
+    styler = styler.format(_fmt_num, subset=["value"])
+    return styler
+
 
 def _safe_int(x):
     try:
