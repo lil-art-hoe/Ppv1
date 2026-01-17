@@ -686,7 +686,19 @@ date_ds_df = pd.DataFrame(rows_ds)
 if not show_droot and "Digital Root" in date_ds_df.columns:
     date_ds_df = date_ds_df.drop(columns=["Digital Root"])
 with st.expander("Date Numbers — Digit Sums", expanded=not collapse_all):
-    st.table(style_date_df_with_highlights(date_ds_df.rename(columns={"Digit Sum":"value"}), hl, colors_map, focus_set, enable_bg=highlight_tables))
+        # Show Digit Sum (styled)
+    if not date_ds_df.empty:
+        ds_view = date_ds_df[["formula", "digit_sum"]].rename(columns={"digit_sum": "value"})
+        st.markdown("**Digit Sum**")
+        st.table(style_date_df_with_highlights(ds_view, hl, colors_map, focus_set, enable_bg=highlight_tables))
+    else:
+        st.caption("No date values computed.")
+
+    # Optional Digital Root (styled)
+    if show_droot and "digital_root" in date_ds_df.columns:
+        dr_view = date_ds_df[["formula", "digital_root"]].rename(columns={"digital_root": "value"})
+        st.markdown("**Digital Root**")
+        st.table(style_date_df_with_highlights(dr_view, hl, colors_map, focus_set, enable_bg=highlight_tables))
 
 st.subheader("Prime Hits")
 try:
