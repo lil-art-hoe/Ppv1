@@ -673,32 +673,38 @@ date_df = pd.DataFrame({"formula": list(date_vals.keys()), "value": list(date_va
 with st.expander("Date Numbers", expanded=not collapse_all):
     st.table(style_date_df_with_highlights(date_df, hl, colors_map, focus_set, enable_bg=highlight_tables))
 
-st.subheader("Date Numbers — Digit Sums")
-rows_ds = []
-for k, v in date_vals.items():
-    try:
-        iv = int(v)
-        ds = digit_sum_once(iv)
-        dr = 1 + ((iv - 1) % 9) if iv > 0 else 0
-        rows_ds.append({"formula": k, "value": iv, "Digit Sum": ds, "Digital Root": dr})
-    except Exception: pass
-date_ds_df = pd.DataFrame(rows_ds, columns=['formula','base','digit_sum','digital_root'])
-if not show_droot and "Digital Root" in date_ds_df.columns:
-    date_ds_df = date_ds_df.drop(columns=["Digital Root"])
 
+st.subheader("Date Numbers — Digit Sums")
 with st.expander("Date Numbers — Digit Sums", expanded=not collapse_all):
-    if not date_ds_df.empty and set(['formula','digit_sum']).issubset(date_ds_df.columns):
-        ds_view = date_ds_df[['formula','digit_sum']].rename(columns={'digit_sum':'value'})
+    # Build Digit Sum table directly from date values
+    ds_rows = []
+    for k, v in date_vals.items():
+        try:
+            iv = int(v)
+            ds_rows.append({"formula": k, "value": digit_sum_once(iv)})
+        except Exception:
+            pass
+    ds_view = pd.DataFrame(ds_rows, columns=["formula","value"])
+    if ds_view.empty:
+        st.caption("No date values computed.")
+    else:
         st.markdown("**Digit Sum**")
         st.table(style_date_df_with_highlights(ds_view, hl, colors_map, focus_set, enable_bg=highlight_tables))
-    else:
-        st.caption("No date values computed.")
-    if show_droot and (not date_ds_df.empty) and set(['formula','digital_root']).issubset(date_ds_df.columns):
-        dr_view = date_ds_df[['formula','digital_root']].rename(columns={'digital_root':'value'})
-        st.markdown("**Digital Root**")
-        st.table(style_date_df_with_highlights(dr_view, hl, colors_map, focus_set, enable_bg=highlight_tables))
-    
 
+    # Optional Digital Root table
+    if show_droot:
+        dr_rows = []
+        for k, v in date_vals.items():
+            try:
+                iv = int(v)
+                dr = 1 + ((iv - 1) % 9) if iv > 0 else 0
+                dr_rows.append({"formula": k, "value": dr})
+            except Exception:
+                pass
+        dr_view = pd.DataFrame(dr_rows, columns=["formula","value"])
+        if not dr_view.empty:
+            st.markdown("**Digital Root**")
+            st.table(style_date_df_with_highlights(dr_view, hl, colors_map, focus_set, enable_bg=highlight_tables))
 st.subheader("Prime Hits")
 try:
     _pr_df = primes_df
